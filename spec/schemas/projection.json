@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orlog.dev/schemas/projection.json",
+  "title": "Projection",
+  "description": "L1 contract. A Projection is a pure, versioned view computed from a slice of the log (verdandi: what-is-becoming, re-woven from the fixed past). Projections are read-time artifacts, not ground truth — they may be wrong, re-derived, or rolled back by re-projecting an older version, and none of that touches urd. project(log_slice) must be a pure function: same source_event_ids in, same data out.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "projection_id",
+    "view_name",
+    "version",
+    "computed_at",
+    "source_event_ids",
+    "data"
+  ],
+  "properties": {
+    "projection_id": {
+      "type": "string",
+      "description": "Unique identifier for this projection instance."
+    },
+    "view_name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Which kind of view this is, e.g. 'supersession_chain', 'entity_graph', 'session_summary'. Multiple views may coexist over the same log slice."
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Monotonically increasing version for this view_name. Migration is re-projection to a new version; rollback is re-projection using the old projection logic, never mutation of an old version."
+    },
+    "computed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this projection was computed."
+    },
+    "source_event_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "The exact set of log event_ids this projection was computed from, so the projection is reproducible and auditable back to ground truth."
+    },
+    "quality_score": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1,
+      "default": null,
+      "description": "Fed back retroactively by L5 (skuld) from verification outcomes that relied on this projection. Null until at least one outcome has scored it."
+    },
+    "data": {
+      "type": "object",
+      "description": "The view content itself. Structure is view_name-specific."
+    }
+  }
+}

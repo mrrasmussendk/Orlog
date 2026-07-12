@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orlog.dev/schemas/assertion.json",
+  "title": "Assertion",
+  "description": "L3 contract. derive(query, candidates) -> Assertion{claim, citations[]}, produced by huginn. The one hard rule at this layer: citations must be non-empty. An assertion with zero citations must be rejected before it ever reaches heimdall (L4) — an empty citation list must never pass vacuously through a verifier that only checks 'do all citations pass'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "assertion_id",
+    "claim",
+    "citations",
+    "derived_at"
+  ],
+  "properties": {
+    "assertion_id": {
+      "type": "string",
+      "description": "Unique identifier for this assertion."
+    },
+    "claim": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The natural-language (or structured) claim being asserted."
+    },
+    "citations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/citation" },
+      "minItems": 1,
+      "description": "REQUIRED, non-empty. Every claim must point at the specific evidence it rests on. This is the field most likely to be gamed (e.g. a placeholder citation) — heimdall's job is to check these are real, current, and actually support the claim, not just present."
+    },
+    "derived_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this assertion was produced."
+    },
+    "derived_from": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "The retrieval_id this assertion was derived from, if any."
+    },
+    "retry_of": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "If this assertion is a re-derivation attempt after a failed verification, the assertion_id it replaces. Null for a first attempt. orlog allows exactly one re-derivation per original assertion (DESIGN-PRINCIPLES.md state machine)."
+    }
+  },
+  "$defs": {
+    "citation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["citation_id"],
+      "properties": {
+        "citation_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifier for the evidence this citation points to, e.g. a log event_id or an external source reference."
+        },
+        "excerpt": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Optional excerpt of the cited evidence."
+        }
+      }
+    }
+  }
+}

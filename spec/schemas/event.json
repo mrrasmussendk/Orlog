@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orlog.dev/schemas/event.json",
+  "title": "Event",
+  "description": "L0 contract. An Event is the atomic, append-only unit of ground truth in the log (urd). It is written once and never mutated or deleted. It is bi-temporal: occurred_at is when the thing happened in the world, recorded_at is when orlog learned about it. Any PII in payload must already be pseudonymized before the event is appended (principle 11 in DESIGN-PRINCIPLES.md) — this schema does not and cannot enforce that, it is a caller obligation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "event_type",
+    "occurred_at",
+    "recorded_at",
+    "source",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Unique identifier for this event. Assigned once at append time, never reassigned."
+    },
+    "event_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What kind of thing happened, e.g. 'user_message', 'tool_call', 'fact_stated', 'correction', 'verification_outcome'. Deliberately a free-form string, not an enum: orlog keeps one event stream for everything (principle 8), so the set of event types is open-ended."
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the event happened in the world."
+    },
+    "recorded_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When orlog appended this event to the log. Must not be earlier than occurred_at."
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Where this event came from, e.g. 'user', 'agent', 'tool:pytest'."
+    },
+    "subject_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Stable pseudonym IDs for entities this event is about, if any."
+    },
+    "payload": {
+      "type": "object",
+      "description": "The actual content of the event. Structure is event_type-specific and not constrained further at this layer."
+    }
+  }
+}

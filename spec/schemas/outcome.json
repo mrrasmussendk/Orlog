@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orlog.dev/schemas/outcome.json",
+  "title": "Outcome",
+  "description": "L5 contract. An Outcome is the terminal record of what happened to an assertion: it closes the loop by being appended back to the log (urd) as an event, so skuld's ledger is itself part of ground truth and adaptation (importance weights, cache priors, projection quality scores) is driven only by recorded outcomes, never by co-occurrence (principle 6). final_state must be one of the state machine's terminal states.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "outcome_id",
+    "assertion_id",
+    "final_state",
+    "recorded_at",
+    "verification_ids"
+  ],
+  "properties": {
+    "outcome_id": {
+      "type": "string",
+      "description": "Unique identifier for this outcome record."
+    },
+    "assertion_id": {
+      "type": "string",
+      "description": "The assertion (the final attempt, if a re-derivation occurred) this outcome is about."
+    },
+    "verification_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "All VerificationResult ids that led to this outcome, in chronological order (original attempt, then retry if any)."
+    },
+    "final_state": {
+      "type": "string",
+      "enum": ["verified", "abstained", "reinforced"],
+      "description": "The terminal epistemic state reached. 'reinforced' is used when a later outcome ledger review re-confirms a previously verified assertion's ongoing weight; it is never a first-pass result."
+    },
+    "recorded_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this outcome was recorded."
+    },
+    "appended_event_id": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "The event_id this outcome was written back to urd as, once appended. Null before it has been appended."
+    }
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orlog.dev/schemas/retrieval.json",
+  "title": "RetrievalResult",
+  "description": "L2 contract. retrieve(query, as_of, view, k) -> [Candidate]. Retrieval is pluggable (vector / lexical / graph / whatever) but every backend must obey two rules: it must respect the as_of point (never return facts that were not yet valid, or that have since been superseded, unless as_of says otherwise), and it must report what it excluded — the no-silent-caps rule (principle 12: the kernel protects trust, recall is a separate, honestly-measured budget).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "retrieval_id",
+    "query",
+    "as_of",
+    "view",
+    "k",
+    "results",
+    "excluded"
+  ],
+  "properties": {
+    "retrieval_id": {
+      "type": "string",
+      "description": "Unique identifier for this retrieval call."
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The query that was retrieved against."
+    },
+    "as_of": {
+      "type": "string",
+      "format": "date-time",
+      "description": "The point in time this retrieval is scoped to. 'Current' is just as_of(now)."
+    },
+    "view": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Name of the projection view queried, matching a projection.view_name."
+    },
+    "k": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The requested number of results."
+    },
+    "results": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/candidate" },
+      "description": "Candidates actually returned, at most k."
+    },
+    "excluded": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/exclusion" },
+      "description": "What was left out and why, e.g. below score threshold, outside as_of window, backend truncation. Required even when empty, so an empty list is a positive claim of completeness rather than an unreported gap."
+    }
+  },
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "score"],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "description": "The log event this candidate is grounded in."
+        },
+        "score": {
+          "type": "number",
+          "description": "Backend-specific relevance score."
+        },
+        "excerpt": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Optional human-readable excerpt of the candidate content."
+        }
+      }
+    },
+    "exclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "count"],
+      "properties": {
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Why these candidates were excluded, e.g. 'outside_as_of_window', 'below_score_threshold', 'backend_truncated_at_k'."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many candidates this exclusion reason applied to."
+        }
+      }
+    }
+  }
+}

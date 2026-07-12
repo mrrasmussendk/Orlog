@@ -1,0 +1,39 @@
+[project]
+name = "orlog"
+version = "0.1.0"
+description = "A spec-with-a-runtime for trustworthy AI agent memory."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+# NOTE: the design brief asked for Python 3.11+, but only 3.10 is installed on
+# this machine (checked via `py -0p`). Relaxed to 3.10 so the project actually
+# installs here. Bump back to 3.11 once a newer interpreter is available.
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2,<3",
+    "mcp>=1.0",
+    "python-ulid>=2",
+    "cryptography>=41",
+    "tomli>=2; python_version < '3.11'",
+    "tomli-w>=1",
+]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.40"]
+openai = ["openai>=1.0"]
+fastembed = ["fastembed>=0.4"]
+dev = [
+    "pytest>=8",
+]
+
+[project.scripts]
+orlog = "orlog.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

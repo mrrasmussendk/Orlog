@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orlog.dev/schemas/verification.json",
+  "title": "VerificationResult",
+  "description": "L4 contract. The contract that makes orlog a kernel rather than a store. verify(citation, claim, as_of) -> Pass | Fail(reason), run by heimdall, deterministic, grounded outside the memory's own interpretation (e.g. current law, a test suite, a rules engine, a schema). Full scope is required for a pass: the citation must exist, be currently valid as of as_of, and actually support the claim. Runs on every exit path, including cache hits (muninn) and action-gating (skuld) — nothing is trusted without passing through here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verification_id",
+    "assertion_id",
+    "citation_id",
+    "claim",
+    "as_of",
+    "checks",
+    "passed"
+  ],
+  "properties": {
+    "verification_id": {
+      "type": "string",
+      "description": "Unique identifier for this verification run."
+    },
+    "assertion_id": {
+      "type": "string",
+      "description": "The assertion this verification was run against."
+    },
+    "citation_id": {
+      "type": "string",
+      "description": "The specific citation being checked. An assertion with multiple citations gets one VerificationResult per citation."
+    },
+    "claim": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The claim text being checked against this citation, carried alongside for auditability."
+    },
+    "as_of": {
+      "type": "string",
+      "format": "date-time",
+      "description": "The point in time validity was checked against."
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exists", "currently_valid", "supports_claim"],
+      "description": "The three required scopes of a verification. All three must be true for passed to be true.",
+      "properties": {
+        "exists": {
+          "type": "boolean",
+          "description": "Does the cited evidence actually exist (e.g. does the event_id resolve, is the source reachable)?"
+        },
+        "currently_valid": {
+          "type": "boolean",
+          "description": "Is the citation still valid as of as_of (not superseded, not expired)?"
+        },
+        "supports_claim": {
+          "type": "boolean",
+          "description": "Does the cited evidence actually support the specific claim text, not just exist and be valid?"
+        }
+      }
+    },
+    "passed": {
+      "type": "boolean",
+      "description": "True if and only if checks.exists AND checks.currently_valid AND checks.supports_claim are all true."
+    },
+    "reason": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "Required (non-null) when passed is false: which check(s) failed and why. Must be null when passed is true."
+    }
+  }
+}
