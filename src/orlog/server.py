@@ -44,11 +44,14 @@ def build_server(runtime: Runtime) -> FastMCP:
     ) -> dict:
         """Append a scrubbed memory to the log. Returns {event_id}.
 
-        `text` alone is always durably stored, but it is NOT retrievable via
-        recall()/recall_history() unless entity, attribute, AND value are
-        also given -- those three make it a queryable fact (key
-        "{entity}.{attribute}"). To later recall("user:42.email"), you must
-        call remember(text=..., entity="user:42", attribute="email", value="...").
+        entity, attribute, AND value are all REQUIRED (alongside text) --
+        those three make it a queryable fact (key "{entity}.{attribute}"),
+        e.g. remember(text=..., entity="user:42", attribute="email",
+        value="..."), later recallable as recall("user:42.email"). A
+        text-only call (any of the three omitted) is rejected with an
+        E_SCHEMA error: it would be durably logged but permanently
+        unretrievable via recall()/recall_history() in this reference
+        server, which is a silent dead end this tool refuses to create.
 
         `entity_detail` disambiguates two entities that would otherwise
         share a bare name (e.g. two different people both named "Anna"):

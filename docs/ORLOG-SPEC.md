@@ -305,11 +305,15 @@ B9. MCP server surface
 Server name orlog. Tools (JSON Schema in spec/schemas/mcp/):
 
 
-remember — args: {text, occurred_at?, type?="fact", actor?="user", entity?,
-attribute?, value?, entity_detail?, register_new_type?=false,
+remember — args: {text, occurred_at?, type?="fact", actor?="user", entity,
+attribute, value, entity_detail?, register_new_type?=false,
 register_new_attribute?=false} → returns {event_id}. Runs scrub → append →
-incremental projection update. When entity/attribute/value are all given and
-[schema].known_types (§B10) is non-empty: entity's type prefix (the "person"
+incremental projection update. entity, attribute, AND value are REQUIRED
+together (not merely optional structured fields alongside text) — a
+text-only write is durably loggable but permanently unretrievable via
+recall()/recall_history(), so remember() raises E_SCHEMA rather than
+silently create that dead end. When [schema].known_types (§B10) is
+non-empty: entity's type prefix (the "person"
 in "person:emma") MUST be a known type (declared in known_types, OR already
 used by a prior fact -- register_new_type=true's effect is durable, not a
 one-time bypass) unless register_new_type=true; once a type has at least one

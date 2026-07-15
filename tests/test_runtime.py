@@ -61,8 +61,26 @@ def test_remembered_value_is_tokenized_and_recoverable_through_the_vault(runtime
 
 
 def test_build_pipeline_returns_none_with_no_fact_events(runtime):
-    runtime.remember("just a note", occurred_at=T1)  # no entity/attribute/value
+    # A bare-text remember() is rejected outright (see the tests below), so
+    # the only way to reach "zero fact events" now is an untouched log.
     assert runtime.build_pipeline(now=NOW) is None
+
+
+def test_remember_rejects_text_with_no_entity_attribute_or_value(runtime):
+    with pytest.raises(SchemaError) as exc_info:
+        runtime.remember("just a note", occurred_at=T1)
+    assert "entity" in str(exc_info.value)
+    assert "attribute" in str(exc_info.value)
+    assert "value" in str(exc_info.value)
+
+
+def test_remember_rejects_a_partial_entity_attribute_value(runtime):
+    # entity given without attribute/value used to be silently discarded as
+    # if entity had never been passed at all -- now an explicit error.
+    with pytest.raises(SchemaError):
+        runtime.remember("just a note", occurred_at=T1, entity="user:1")
+    with pytest.raises(SchemaError):
+        runtime.remember("just a note", occurred_at=T1, entity="user:1", attribute="plan")
 
 
 def test_remember_then_recall_round_trips(runtime):

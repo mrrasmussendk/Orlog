@@ -13,11 +13,15 @@ Design decisions:
 
 2. This reference server's queryable domain is still the "fact" convention
    established since the very first milestone: payload {entity, attribute,
-   value}. `remember()` accepts entity/attribute/value as optional
-   structured fields alongside free `text` -- when given, the event is a
-   "fact" the Pipeline (point-in-time entity.attribute lookups) can answer
-   about; free-text-only memories are still durably appended (G1/G2 hold),
-   but are not retrievable through recall() in this reference server.
+   value}. `remember()` REQUIRES entity, attribute, AND value together
+   (alongside free `text`) -- every event this reference server appends is
+   a "fact" the Pipeline (point-in-time entity.attribute lookups) can
+   answer about. A bare-text write (any of the three omitted) used to be
+   silently accepted and durably appended (G1/G2 still held) but was
+   permanently unretrievable through recall()/recall_history() -- a
+   dead-end memory with no error. `remember()` now raises SchemaError
+   instead, at write time, per the same "fail visible, not plausible"
+   discipline as `_enforce_schema`/`_enforce_entity_detail` below.
 
    A non-dotted `recall()` query DOES now fall back to genuinely free-text
    recall, via retrieval_hybrid's resolve_key() (see server_tools.py):
@@ -179,45 +183,59 @@ class Runtime:
         register_new_type: bool = False,
         register_new_attribute: bool = False,
     ):
+        # entity/attribute/value are now REQUIRED together, not optional: a
+        # bare-text write (any of the three missing) used to be silently
+        # accepted and durably appended, but was permanently unretrievable
+        # through recall()/recall_history() in this reference server -- a
+        # dead-end memory with no error and no way to notice it happened.
+        # Rejecting it at write time is the same "fail visible, not
+        # plausible" discipline as _enforce_schema/_enforce_entity_detail
+        # below: an actionable error now, instead of a silent, permanent gap
+        # discovered only much later at read time.
+        if entity is None or attribute is None or value is None:
+            raise SchemaError(
+                "remember() requires entity, attribute, and value together to store a queryable "
+                "fact -- text-only memories are not retrievable via recall()/recall_history() in "
+                f"this reference server (got entity={entity!r}, attribute={attribute!r}, value={value!r})."
+            )
         occurred_at = occurred_at or datetime.now(timezone.utc)
         scrubbed_text = scrub(text, self.vault, detectors=self.config.privacy.detectors)
         payload: dict = {"text": scrubbed_text}
-        if entity is not None and attribute is not None and value is not None:
-            self._enforce_schema(entity, attribute, register_new_type=register_new_type, register_new_attribute=register_new_attribute)
-            self._enforce_entity_detail(entity, entity_detail)
-            # `value` is caller-supplied free-form fact content and can carry
-            # the same PII shapes `text` can (e.g. value="alice@example.com")
-            # -- it MUST go through the same scrub() pass, or it lands in the
-            # immutable log in cleartext, un-tokenized and therefore
-            # unreachable by vault.forget()'s crypto-shredding (scrub.py's
-            # own module docstring: "nothing downstream of this module
-            # should see unscrubbed text"). entity/attribute are structured
-            # lookup keys, not prose, and stay as given -- scrubbing them
-            # would break exact-match recall("entity.attribute") queries.
-            scrubbed_value = scrub(value, self.vault, detectors=self.config.privacy.detectors)
-            # `entity_detail` disambiguates two entities that share a bare
-            # name (the "which Anna" problem) -- it becomes PART OF the
-            # chain-grouping key itself (verdandi/heimdall need no changes,
-            # since both already group by whatever literal string lands in
-            # payload["entity"]), while the bare name and detail are also
-            # kept separately for display/disambiguation output. Like
-            # entity/attribute, this is a structured qualifier, not prose,
-            # so it is NOT scrubbed -- same reasoning as above.
-            stored_entity = f"{entity}#{entity_detail}" if entity_detail else entity
-            payload.update(entity=stored_entity, attribute=attribute, value=scrubbed_value)
-            # Write-time self-consistency check (heimdall.GroundTruthFact.self_supported):
-            # does this fact's own remembered text actually support the value
-            # it's being recorded with? Checked once, here, on both post-scrub
-            # strings (so a value that happens to be PII still matches the
-            # identically-tokenized span in text) -- never re-derived on
-            # every read. A caller-contradicted fact (e.g. text says "Paris",
-            # value says "Tokyo") is then a fast, permanent, correctly-labeled
-            # verification failure for every future reader instead of a fresh
-            # derive+verify round trip (and its failure mode) on every recall().
-            payload["self_supported"] = scrubbed_value in scrubbed_text
-            if entity_detail:
-                payload["entity_label"] = entity
-                payload["entity_detail"] = entity_detail
+        self._enforce_schema(entity, attribute, register_new_type=register_new_type, register_new_attribute=register_new_attribute)
+        self._enforce_entity_detail(entity, entity_detail)
+        # `value` is caller-supplied free-form fact content and can carry
+        # the same PII shapes `text` can (e.g. value="alice@example.com")
+        # -- it MUST go through the same scrub() pass, or it lands in the
+        # immutable log in cleartext, un-tokenized and therefore
+        # unreachable by vault.forget()'s crypto-shredding (scrub.py's
+        # own module docstring: "nothing downstream of this module
+        # should see unscrubbed text"). entity/attribute are structured
+        # lookup keys, not prose, and stay as given -- scrubbing them
+        # would break exact-match recall("entity.attribute") queries.
+        scrubbed_value = scrub(value, self.vault, detectors=self.config.privacy.detectors)
+        # `entity_detail` disambiguates two entities that share a bare
+        # name (the "which Anna" problem) -- it becomes PART OF the
+        # chain-grouping key itself (verdandi/heimdall need no changes,
+        # since both already group by whatever literal string lands in
+        # payload["entity"]), while the bare name and detail are also
+        # kept separately for display/disambiguation output. Like
+        # entity/attribute, this is a structured qualifier, not prose,
+        # so it is NOT scrubbed -- same reasoning as above.
+        stored_entity = f"{entity}#{entity_detail}" if entity_detail else entity
+        payload.update(entity=stored_entity, attribute=attribute, value=scrubbed_value)
+        # Write-time self-consistency check (heimdall.GroundTruthFact.self_supported):
+        # does this fact's own remembered text actually support the value
+        # it's being recorded with? Checked once, here, on both post-scrub
+        # strings (so a value that happens to be PII still matches the
+        # identically-tokenized span in text) -- never re-derived on
+        # every read. A caller-contradicted fact (e.g. text says "Paris",
+        # value says "Tokyo") is then a fast, permanent, correctly-labeled
+        # verification failure for every future reader instead of a fresh
+        # derive+verify round trip (and its failure mode) on every recall().
+        payload["self_supported"] = scrubbed_value in scrubbed_text
+        if entity_detail:
+            payload["entity_label"] = entity
+            payload["entity_detail"] = entity_detail
         draft = EventDraft(occurred_at=occurred_at, actor=actor, type=event_type, payload=payload)
         event = self.log.append(draft)
         self.index.index_event(event, segment=self._current_segment_name(), offset=self.log.current_segment_offset())

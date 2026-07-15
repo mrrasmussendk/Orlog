@@ -1,16 +1,54 @@
 # orlog
 
+[![CI](https://github.com/mrrasmussendk/Orlog/actions/workflows/ci.yml/badge.svg)](https://github.com/mrrasmussendk/Orlog/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+
 > Odin feared for Huginn, but worried more for Muninn.
 > — *Grímnismál*
 
-**orlog** is a spec-with-a-runtime for trustworthy AI agent memory. The name is
-the Norse *ørlǫg*: the immutable layers of what has been laid down, from which
-the Norns weave the present. That is the architecture — an append-only,
-hash-chained event log, with interpretation continuously re-woven on top of
-it, and a deterministic gatekeeper checking every claim before it reaches the
-world. Agent knowledge moves through an explicit state machine instead of an
-opaque "memory store," so a system built on orlog can always say *why* it
-believes something, and can say "I don't know" instead of guessing.
+**orlog is memory for AI agents that would rather say "I don't know" than be
+wrong.** Every claim it hands back is either **VERIFIED** — checked against
+the raw historical record, on every single call, no exceptions — or
+**ABSTAINED**, with a reason. Nothing in between. No confident-sounding
+guesses.
+
+The name is the Norse *ørlǫg*: the immutable layers of what has been laid
+down, from which the Norns weave the present. That is the architecture — an
+append-only, hash-chained event log, with interpretation continuously
+re-woven on top of it, and a deterministic gatekeeper checking every claim
+before it reaches the world. Agent knowledge moves through an explicit state
+machine instead of an opaque "memory store," so a system built on orlog can
+always say *why* it believes something.
+
+## 60 seconds of orlog
+
+```python
+>>> remember_tool(runtime, "Alice's plan is Pro",
+...                entity="user:alice", attribute="plan", value="Pro")
+{"event_id": "01J...9K2"}
+
+>>> recall_tool(runtime, "user:alice.plan")
+{
+  "verified": true,
+  "claim": "user:alice.plan is Pro",
+  "citations": [{"event_id": "01J...9K2", "excerpt": "Alice's plan is Pro"}],
+  "as_of": "2026-07-15T12:00:00+00:00",
+  "abstained": false
+}
+
+>>> recall_tool(runtime, "user:alice.shoe_size")
+{
+  "verified": false,
+  "claim": null,
+  "abstained": true,
+  "reasons": ["NO_CANDIDATES"]
+}
+```
+
+Nothing gets asserted that can't be traced back to a specific, timestamped
+event. Ask about something orlog never learned, and it tells you so instead
+of inventing an answer.
 
 ## The state machine
 
@@ -43,6 +81,12 @@ doesn't match the spec exactly.
 
 ## The Norse module map
 
+Fourteen modules, six layers, one rule: nothing reaches the world without
+evidence.
+
+<details>
+<summary><strong>Full module-by-module breakdown</strong> (click to expand)</summary>
+
 | Module                | Norse role                              | Layer | What it does |
 |------------------------|-----------------------------------------|-------|---------------|
 | `urd.py`               | the fixed past — the event log           | L0    | append-only, hash-chained JSONL, ULID ids |
@@ -74,6 +118,8 @@ The reference domain throughout is point-in-time facts shaped
 (deterministic, no LLM call) and ships permanently, per spec, for
 API-key-free conformance runs; `LLMDeriver` is the real thing, swapped in via
 `orlog.toml`'s `[deriver] backend = "anthropic" | "openai" | "scripted"`.
+
+</details>
 
 ## Layout
 

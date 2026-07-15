@@ -69,11 +69,14 @@ def remember_tool(
     actor: str = "user", entity: str | None = None, attribute: str | None = None, value: str | None = None,
     entity_detail: str | None = None, register_new_type: bool = False, register_new_attribute: bool = False,
 ) -> dict:
-    """spec §B9: {text, occurred_at?, type?="fact", actor?="user", entity?,
-    attribute?, value?, entity_detail?, register_new_type?, register_new_attribute?}
-    -> {event_id}. Raises orlog.errors.SchemaError (E_SCHEMA) if schema-on-write
-    or the entity_detail-required-on-collision rule rejects the write -- see
-    Runtime.remember()'s own docstring/helpers for the rules themselves.
+    """spec §B9: {text, occurred_at?, type?="fact", actor?="user", entity,
+    attribute, value, entity_detail?, register_new_type?, register_new_attribute?}
+    -> {event_id}. entity/attribute/value are REQUIRED together -- a
+    text-only memory is not retrievable via recall()/recall_history() in
+    this reference server, so Runtime.remember() rejects it outright.
+    Raises orlog.errors.SchemaError (E_SCHEMA) if that requirement, schema-
+    on-write, or the entity_detail-required-on-collision rule rejects the
+    write -- see Runtime.remember()'s own docstring/helpers for the rules.
     """
     occurred = _parse_datetime(occurred_at) if occurred_at else datetime.now(timezone.utc)
     event = runtime.remember(
