@@ -7,8 +7,10 @@ from datetime import datetime, timezone
 
 import pytest
 
-from orlog.cli import build_parser, cmd_forget, cmd_init, cmd_inspect, cmd_replay
-from orlog.config import load_config
+import json
+
+from orlog.cli import build_parser, cmd_forget, cmd_init, cmd_inspect, cmd_replay, cmd_serve, write_claude_code_mcp_config
+from orlog.config import load_config, save_config
 from orlog.models.event import EventDraft
 from orlog.vault import Vault, generate_key
 from orlog.workspace import Workspace
@@ -53,6 +55,78 @@ def test_init_is_idempotent_and_does_not_overwrite_existing_config(tmp_path):
     cmd_init(args)  # second run
 
     assert ws.config_path.read_text(encoding="utf-8") == original
+
+
+def test_write_claude_code_mcp_config_creates_a_new_file(tmp_path):
+    root = tmp_path / "myproject"
+    cmd_init(build_parser().parse_args(["init", str(root)]))
+    ws = Workspace(root)
+    claude_config = tmp_path / "claude.json"
+
+    result_path = write_claude_code_mcp_config(ws, "the-vault-key", config_path=claude_config)
+
+    assert result_path == claude_config
+    data = json.loads(claude_config.read_text(encoding="utf-8"))
+    entry = data["mcpServers"]["orlog"]
+    assert entry["args"] == ["serve", str(root.resolve())]
+    assert entry["env"] == {"ORLOG_VAULT_KEY": "the-vault-key"}
+
+
+def test_write_claude_code_mcp_config_preserves_unrelated_data_and_backs_up(tmp_path):
+    root = tmp_path / "myproject"
+    cmd_init(build_parser().parse_args(["init", str(root)]))
+    ws = Workspace(root)
+    claude_config = tmp_path / "claude.json"
+    claude_config.write_text(json.dumps({"someOtherSetting": True, "mcpServers": {"other": {"command": "x"}}}), encoding="utf-8")
+
+    write_claude_code_mcp_config(ws, "the-vault-key", config_path=claude_config)
+
+    data = json.loads(claude_config.read_text(encoding="utf-8"))
+    assert data["someOtherSetting"] is True
+    assert data["mcpServers"]["other"] == {"command": "x"}
+    assert "orlog" in data["mcpServers"]
+    assert claude_config.with_suffix(".json.bak").exists()
+
+
+def test_init_with_claude_code_registers_an_mcp_server(tmp_path, monkeypatch):
+    claude_config = tmp_path / "claude.json"
+    monkeypatch.setattr("orlog.cli._default_claude_code_config_path", lambda: claude_config)
+    root = tmp_path / "myproject"
+
+    rc = cmd_init(build_parser().parse_args(["init", str(root), "--claude-code"]))
+
+    assert rc == 0
+    data = json.loads(claude_config.read_text(encoding="utf-8"))
+    assert "ORLOG_VAULT_KEY" in data["mcpServers"]["orlog"]["env"]
+
+
+def test_init_with_claude_code_reports_a_clear_error_on_malformed_existing_json(tmp_path, monkeypatch, capsys):
+    claude_config = tmp_path / "claude.json"
+    claude_config.write_text("{not valid json", encoding="utf-8")
+    monkeypatch.setattr("orlog.cli._default_claude_code_config_path", lambda: claude_config)
+    root = tmp_path / "myproject"
+
+    rc = cmd_init(build_parser().parse_args(["init", str(root), "--claude-code"]))
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "not valid JSON" in err
+    assert "ORLOG_VAULT_KEY=" in err  # the key is still surfaced, not lost
+    # The workspace itself must still be usable even though registration failed.
+    assert Workspace(root).config_path.exists()
+
+
+def test_init_with_claude_code_on_an_existing_workspace_does_not_clobber_the_key(tmp_path, monkeypatch):
+    claude_config = tmp_path / "claude.json"
+    monkeypatch.setattr("orlog.cli._default_claude_code_config_path", lambda: claude_config)
+    root = tmp_path / "myproject"
+    cmd_init(build_parser().parse_args(["init", str(root), "--claude-code"]))
+    original = claude_config.read_text(encoding="utf-8")
+
+    rc = cmd_init(build_parser().parse_args(["init", str(root), "--claude-code"]))  # second run
+
+    assert rc == 0
+    assert claude_config.read_text(encoding="utf-8") == original
 
 
 def test_replay_verifies_the_chain_and_rebuilds_the_index(tmp_path):
@@ -149,3 +223,59 @@ def test_forget_of_an_unknown_token_fails(tmp_path):
     rc = cmd_forget(build_parser().parse_args(["forget", "EMAIL_999", str(root)]))
 
     assert rc == 1
+
+
+class _StubMcpServer:
+    """Stands in for FastMCP -- .run() would otherwise block forever reading
+    stdio, which a unit test can't do."""
+
+    def __init__(self):
+        self.ran = False
+
+    def run(self, transport):
+        self.ran = True
+
+
+def test_serve_preloads_the_embedder_before_running(tmp_path, monkeypatch):
+    # Runtime.embedder used to be built lazily on the first free-text
+    # recall() call -- a cold model load/download on the request path. It
+    # must now be warmed during cmd_serve, before the server ever starts
+    # accepting calls.
+    root = tmp_path / "myproject"
+    cmd_init(build_parser().parse_args(["init", str(root)]))
+    ws = Workspace(root)
+    config = load_config(ws.config_path)
+    config.retrieval.embedder = "hashing"  # instant, dependency-free build
+    save_config(config, ws.config_path)
+
+    captured = {}
+
+    def fake_build_server(runtime):
+        captured["runtime"] = runtime
+        return _StubMcpServer()
+
+    monkeypatch.setattr("orlog.server.build_server", fake_build_server)
+
+    rc = cmd_serve(build_parser().parse_args(["serve", str(root)]))
+
+    assert rc == 0
+    assert captured["runtime"]._embedder is not None
+    assert captured["runtime"].embedder.name  # actually usable, not just non-None
+
+
+def test_serve_keeps_running_when_the_embedder_preload_times_out(tmp_path, monkeypatch, capsys):
+    from orlog.errors import RetrieverUnavailableError
+
+    root = tmp_path / "myproject"
+    cmd_init(build_parser().parse_args(["init", str(root)]))
+
+    def raise_unavailable(self):
+        raise RetrieverUnavailableError("embedder did not become ready")
+
+    monkeypatch.setattr("orlog.runtime.Runtime.embedder", property(raise_unavailable))
+    monkeypatch.setattr("orlog.server.build_server", lambda runtime: _StubMcpServer())
+
+    rc = cmd_serve(build_parser().parse_args(["serve", str(root)]))
+
+    assert rc == 0
+    assert "embedder" in capsys.readouterr().err.lower()

@@ -13,6 +13,9 @@ def test_minimal_config_gets_full_spec_defaults():
     assert config.deriver.backend == "scripted"
     assert config.deriver.max_tokens == 400
     assert config.retrieval.k == 8
+    assert config.retrieval.embedder == "BAAI/bge-small-en-v1.5"
+    assert config.retrieval.min_confidence == 0.35
+    assert config.retrieval.ambiguity_margin == 0.90
     assert config.verifier.backend == "windows"
     assert config.projections.supersession_chains.grouping == "entity+type"
     assert config.adaptation.pass_bonus == 0.5

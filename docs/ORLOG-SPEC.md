@@ -305,12 +305,43 @@ B9. MCP server surface
 Server name orlog. Tools (JSON Schema in spec/schemas/mcp/):
 
 
-remember — args: {text, occurred_at?, type?="fact", actor?="user"} →
-returns {event_id}. Runs scrub → append → incremental projection update.
+remember — args: {text, occurred_at?, type?="fact", actor?="user", entity?,
+attribute?, value?, entity_detail?, register_new_type?=false,
+register_new_attribute?=false} → returns {event_id}. Runs scrub → append →
+incremental projection update. When entity/attribute/value are all given and
+[schema].known_types (§B10) is non-empty: entity's type prefix (the "person"
+in "person:emma") MUST be a known type (declared in known_types, OR already
+used by a prior fact -- register_new_type=true's effect is durable, not a
+one-time bypass) unless register_new_type=true; once a type has at least one
+attribute on record, a NEW attribute for it MUST already be known (a type's
+first-ever attribute is always accepted, nothing to diverge from yet) unless
+register_new_attribute=true. Either violation raises E_SCHEMA naming the
+known set. Independent of schema
+(and not gated by [schema].known_types): when a fact's bare entity label
+already has one or more entity_detail values on record, entity_detail is
+REQUIRED on this write — supplying one that matches an existing detail
+continues that entity, a new one introduces another distinct entity under the
+same label; omitting it raises E_SCHEMA naming the existing detail(s), so a
+caller can never silently create an ambiguous second entity by accident.
+Entities with no ":" in them, or workspaces with an empty/absent
+[schema].known_types, are exempt from the type/attribute check (but never
+from the entity_detail check, which needs no config).
 recall — args: {query, as_of?="now"} → returns the Answer object (§A3).
 Tool description MUST state the guarantee mode (conformant vs degraded).
 recall_history — args: {query} → the fact's full chain with validity
 windows (the "what did it used to be" tool).
+list_entities — args: {prefix?, limit?} → {entities: [{entity_label,
+entity_detail, attribute_count}]}. A deterministic scan over the log's own
+fact events, grouped by (entity_label, entity_detail) — zero tokens, no
+embedding call, no derive/verify. The scan/list primitive: lets a caller
+enumerate what it already knows without a semantic search.
+list_attributes — args: {entity} → {entity, attributes: [{attribute, value,
+valid_from, valid_to}]}, one entry per attribute at its current (as-of-now)
+value. entity may be the bare label or the exact "label#detail" form. If a
+bare label matches more than one disambiguated entity, returns {ambiguous:
+true, entity, candidates: [...]} instead of guessing which one — the same
+abstain-don't-guess discipline as recall()'s AMBIGUOUS path. Same zero-token,
+no-embedding guarantee as list_entities.
 check_action — args: {action_description} → advisory {warnings:[…], prior_outcomes:[…]} from skuld (memory-as-governance).
 stats — no args → counters (§B8).
 
@@ -355,6 +386,18 @@ max_entries = 10000
 [privacy]
 detectors = ["regex"]          # +"ner"
 resolve_entities = false
+
+[schema]
+known_types = []                # e.g. ["person", "user"] -- entity-type
+                                 # prefixes (the "person" in "person:emma")
+                                 # remember() accepts without
+                                 # register_new_type=true. Empty (default):
+                                 # schema-on-write is off, every entity/
+                                 # attribute string is accepted as in v1.0
+                                 # pre-revision. Known attributes per type are
+                                 # NOT declared here -- the log itself is the
+                                 # attribute registry (any attribute already
+                                 # used by a fact of a known type is known).
 
 B11. Built-in verifiers
 

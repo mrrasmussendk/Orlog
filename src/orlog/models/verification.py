@@ -1,5 +1,15 @@
 """VerificationResult: the L4 contract, mirrors spec/schemas/verification.json.
 
+NOTE: this is the turn-1, generic epistemic-contract VerificationResult
+(one citation per result), kept only for tests/test_verification_gate.py's
+abstract state-machine proof. The REAL VerificationResult the pipeline uses
+is `orlog.heimdall.VerificationResult` -- a different, incompatible shape
+(one result per assertion, aggregating a `failures: list[VerificationFailure]`
+across all citations). Import this one only via
+`from orlog.models.verification import VerificationResult`, never via
+`from orlog.models import VerificationResult` (not re-exported at the
+package level, on purpose).
+
 Design decision: `passed` is not computed automatically from `checks` by a
 validator. It is written by whatever plays heimdall (a real checker, or the
 trivial in-memory fake used in tests), and this model then *validates* that

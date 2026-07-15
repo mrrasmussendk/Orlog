@@ -44,6 +44,18 @@ def test_phone_number_is_detected(vault):
     assert "PHONE_1" in scrubbed
 
 
+def test_dot_separated_phone_number_is_detected(vault):
+    scrubbed = scrub("call the office at 212.555.0147 today", vault)
+    assert "212.555.0147" not in scrubbed
+    assert "PHONE_1" in scrubbed
+
+
+def test_ip_addresses_decimals_and_version_strings_are_not_mistaken_for_phone_numbers(vault):
+    assert scrub("server ip is 192.168.1.100 ok", vault) == "server ip is 192.168.1.100 ok"
+    assert scrub("pi is 3.14159265 approx", vault) == "pi is 3.14159265 approx"
+    assert scrub("version 1.2.3.4.5.6.7 released", vault) == "version 1.2.3.4.5.6.7 released"
+
+
 def test_resolving_the_pseudonym_recovers_the_original_text(vault):
     scrubbed = scrub("email alice@example.com", vault)
     token = next(w for w in scrubbed.split() if w.startswith("EMAIL_"))

@@ -63,7 +63,30 @@ class VerifierUnavailableError(OrlogError):
     code = "E_VERIFIER_UNAVAILABLE"
 
 
+class RetrieverUnavailableError(OrlogError):
+    """The L2 retriever (e.g. a semantic embedder that needs a cold model
+    load/download) didn't become ready within its bounded timeout. Callers
+    MUST turn this into an abstention (reason EMBEDDER_UNAVAILABLE), never
+    block indefinitely -- a single stdio MCP server call hanging blocks
+    every other call behind it, which is worse than an honest abstention.
+    """
+
+    code = "E_RETRIEVER_UNAVAILABLE"
+
+
 class StorageError(OrlogError):
     """A storage-layer failure (disk, SQLite index, etc.)."""
 
     code = "E_STORAGE"
+
+
+class VerifyTimeoutError(OrlogError):
+    """Pipeline.answer()'s derive+verify attempt did not complete within its
+    bounded timeout (config.verifier.answer_timeout_s) -- a backstop
+    independent of whatever per-call timeout the deriver itself claims to
+    enforce, so a read never blocks past this ceiling even if that inner
+    timeout fails to fire. Callers MUST turn this into an abstention
+    (reason VERIFY_TIMEOUT), same convention as RetrieverUnavailableError.
+    """
+
+    code = "E_VERIFY_TIMEOUT"

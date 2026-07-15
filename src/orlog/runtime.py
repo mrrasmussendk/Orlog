@@ -17,21 +17,54 @@ Design decisions:
    structured fields alongside free `text` -- when given, the event is a
    "fact" the Pipeline (point-in-time entity.attribute lookups) can answer
    about; free-text-only memories are still durably appended (G1/G2 hold),
-   but are not retrievable through recall() in this reference server. A
-   genuinely free-text recall would mean wiring retrieval_hybrid's
-   embedding search into Pipeline as a pluggable retriever -- a real
-   capability this project has (see retrieval_hybrid.py), just not wired
-   into the live server this round. `recall`'s `query` argument is
-   therefore expected in "entity.attribute" form (e.g. "user:42.email"),
-   matching the same convention Pipeline.answer() already builds
-   internally.
+   but are not retrievable through recall() in this reference server.
+
+   A non-dotted `recall()` query DOES now fall back to genuinely free-text
+   recall, via retrieval_hybrid's resolve_key() (see server_tools.py):
+   the embedding search only ever resolves which (entity, attribute) key a
+   query is about, never the answer itself -- Pipeline.answer() is still
+   what serves the deterministic, freshness-checked, cited value for that
+   resolved key. `recall`'s `query` argument therefore has two valid forms:
+   an exact "entity.attribute" key (e.g. "user:42.email", matching the
+   convention Pipeline.answer() builds internally -- unchanged, fast path,
+   no semantic search involved) or free text with no "." at all.
+
+3. `Runtime.embedder` is built lazily (see `_build_embedder()` below) --
+   only the first time the free-text fallback path actually runs -- so a
+   workspace/test that never exercises it never pays for constructing one,
+   matching retrieval_hybrid.FastEmbedEmbedder's own lazy `fastembed` import.
+
+   That first build can be network-bound (a cold FastEmbedEmbedder without
+   a warm model cache has to download it), so it runs on a worker thread
+   with a hard wall-clock timeout (`config.retrieval.embedder_build_timeout_s`)
+   rather than directly on the caller's thread: a stdio MCP server handles
+   one call at a time, so an unbounded hang here blocks every other tool
+   call behind it, not just this one recall(). Exceeding the timeout raises
+   RetrieverUnavailableError -- server_tools.recall_tool turns that into an
+   honest EMBEDDER_UNAVAILABLE abstention, never a silent multi-minute stall.
+
+4. `remember()` computes and stores a `self_supported` verdict on any fact
+   payload (does this fact's own remembered text support the value it's
+   being recorded with?) -- checked ONCE, here, at write time. A read that
+   later hits a self-contradictory fact (Pipeline.answer(), via
+   heimdall.GroundTruthFact.self_supported) fails fast with
+   UNSUPPORTED_BY_SOURCE and never even attempts a derive() call for it --
+   a poisoned fact is a permanent, instant verification failure for every
+   future reader, not a fresh (and for a real LLM deriver, potentially
+   network-bound) derive+verify round trip repeated on every recall().
+   Pipeline.answer() additionally bounds every derive() attempt it DOES
+   make with its own hard wall-clock ceiling (`config.verifier.answer_timeout_s`,
+   VERIFY_TIMEOUT on expiry) -- a backstop for any OTHER failure mode this
+   write-time check doesn't cover, so a read can never block indefinitely.
 """
 
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timezone
 
 from orlog.config import OrlogConfig
+from orlog.errors import RetrieverUnavailableError, SchemaError
 from orlog.heimdall import Heimdall, build_ground_truth
 from orlog.huginn import ScriptedDeriver
 from orlog.models.event import EventDraft
@@ -62,6 +95,22 @@ def _build_deriver(config: OrlogConfig):
     raise ValueError(f"unknown deriver backend {config.deriver.backend!r}")
 
 
+def _build_embedder(config: OrlogConfig):
+    """"hashing" selects the dependency-free HashingEmbedder (an explicit,
+    offline opt-out); anything else -- including this project's own default,
+    "BAAI/bge-small-en-v1.5" (spec §B3) -- is treated as a fastembed model
+    name, lazily importing FastEmbedEmbedder (the only place a real model
+    download can be triggered).
+    """
+    if config.retrieval.embedder == "hashing":
+        from orlog.retrieval_hybrid import HashingEmbedder
+
+        return HashingEmbedder()
+    from orlog.retrieval_hybrid import FastEmbedEmbedder
+
+    return FastEmbedEmbedder(model_name=config.retrieval.embedder)
+
+
 class Runtime:
     """One open workspace: log, index, vault, cache, ledger, stats."""
 
@@ -76,6 +125,45 @@ class Runtime:
         self.ledger = OutcomeLedger(self.log, index=self.index)
         self.stats = Stats()
         self.deriver = _build_deriver(config)
+        self._embedder = None
+
+    @property
+    def embedder(self):
+        """Lazily built, on a worker thread with a hard timeout -- see
+        module docstring point 3. Raises RetrieverUnavailableError (never
+        hangs past config.retrieval.embedder_build_timeout_s) if the build
+        doesn't finish in time; a later call tries again from scratch (the
+        first attempt is left to finish or die on its own thread -- Python
+        can't forcibly kill it, but it's harmless once abandoned).
+        """
+        if self._embedder is None:
+            # A plain daemon thread, not concurrent.futures.ThreadPoolExecutor:
+            # an Executor's shutdown(wait=True) -- including via its own
+            # __exit__ -- blocks on the very thread we're trying to time out
+            # on, and even shutdown(wait=False) still gets joined by
+            # concurrent.futures' own atexit hook before the process can
+            # exit. A daemon thread is abandoned outright at interpreter
+            # exit, so a genuinely hung build never blocks server shutdown.
+            outcome: dict = {}
+
+            def _build() -> None:
+                try:
+                    outcome["embedder"] = _build_embedder(self.config)
+                except Exception as exc:  # re-raised on the caller's thread below
+                    outcome["error"] = exc
+
+            thread = threading.Thread(target=_build, daemon=True)
+            thread.start()
+            thread.join(timeout=self.config.retrieval.embedder_build_timeout_s)
+            if thread.is_alive():
+                raise RetrieverUnavailableError(
+                    f"embedder {self.config.retrieval.embedder!r} did not become ready within "
+                    f"{self.config.retrieval.embedder_build_timeout_s}s"
+                )
+            if "error" in outcome:
+                raise outcome["error"]
+            self._embedder = outcome["embedder"]
+        return self._embedder
 
     def remember(
         self,
@@ -87,17 +175,162 @@ class Runtime:
         entity: str | None = None,
         attribute: str | None = None,
         value: str | None = None,
+        entity_detail: str | None = None,
+        register_new_type: bool = False,
+        register_new_attribute: bool = False,
     ):
         occurred_at = occurred_at or datetime.now(timezone.utc)
         scrubbed_text = scrub(text, self.vault, detectors=self.config.privacy.detectors)
         payload: dict = {"text": scrubbed_text}
         if entity is not None and attribute is not None and value is not None:
-            payload.update(entity=entity, attribute=attribute, value=value)
+            self._enforce_schema(entity, attribute, register_new_type=register_new_type, register_new_attribute=register_new_attribute)
+            self._enforce_entity_detail(entity, entity_detail)
+            # `value` is caller-supplied free-form fact content and can carry
+            # the same PII shapes `text` can (e.g. value="alice@example.com")
+            # -- it MUST go through the same scrub() pass, or it lands in the
+            # immutable log in cleartext, un-tokenized and therefore
+            # unreachable by vault.forget()'s crypto-shredding (scrub.py's
+            # own module docstring: "nothing downstream of this module
+            # should see unscrubbed text"). entity/attribute are structured
+            # lookup keys, not prose, and stay as given -- scrubbing them
+            # would break exact-match recall("entity.attribute") queries.
+            scrubbed_value = scrub(value, self.vault, detectors=self.config.privacy.detectors)
+            # `entity_detail` disambiguates two entities that share a bare
+            # name (the "which Anna" problem) -- it becomes PART OF the
+            # chain-grouping key itself (verdandi/heimdall need no changes,
+            # since both already group by whatever literal string lands in
+            # payload["entity"]), while the bare name and detail are also
+            # kept separately for display/disambiguation output. Like
+            # entity/attribute, this is a structured qualifier, not prose,
+            # so it is NOT scrubbed -- same reasoning as above.
+            stored_entity = f"{entity}#{entity_detail}" if entity_detail else entity
+            payload.update(entity=stored_entity, attribute=attribute, value=scrubbed_value)
+            # Write-time self-consistency check (heimdall.GroundTruthFact.self_supported):
+            # does this fact's own remembered text actually support the value
+            # it's being recorded with? Checked once, here, on both post-scrub
+            # strings (so a value that happens to be PII still matches the
+            # identically-tokenized span in text) -- never re-derived on
+            # every read. A caller-contradicted fact (e.g. text says "Paris",
+            # value says "Tokyo") is then a fast, permanent, correctly-labeled
+            # verification failure for every future reader instead of a fresh
+            # derive+verify round trip (and its failure mode) on every recall().
+            payload["self_supported"] = scrubbed_value in scrubbed_text
+            if entity_detail:
+                payload["entity_label"] = entity
+                payload["entity_detail"] = entity_detail
         draft = EventDraft(occurred_at=occurred_at, actor=actor, type=event_type, payload=payload)
         event = self.log.append(draft)
-        self.index.index_event(event, segment=self._current_segment_name(), offset=0)
+        self.index.index_event(event, segment=self._current_segment_name(), offset=self.log.current_segment_offset())
         self.stats.record_append()
         return event
+
+    def _enforce_schema(
+        self, entity: str, attribute: str, *, register_new_type: bool, register_new_attribute: bool
+    ) -> None:
+        """spec §B9/§B10: schema-on-write, opt-in via config.schema_.known_types.
+
+        A no-op (nothing to enforce) when the entity has no "type:label"
+        convention at all, or when known_types is empty -- the feature's
+        default-off state, required so every entity string this codebase's
+        own test suite and any pre-existing workspace already use keeps
+        working unmodified. Once a workspace DOES declare known_types,
+        register_new_type/register_new_attribute are the caller's explicit
+        opt-in to grow the registry, rather than a silent auto-accept that
+        risks a typo becoming a permanent, undetected divergent key.
+
+        A type is "known" if it's declared in config OR already used by a
+        prior fact in the log -- register_new_type=true's effect is durable
+        (this write's own append is what makes the type show up in the log
+        scan on every later call), not a one-time bypass that would have to
+        be repeated on every future write of that type. A type's first-ever
+        attribute is always accepted without register_new_attribute=true --
+        there is nothing yet on record for that type to diverge FROM; only
+        once at least one attribute exists does a genuinely new one need the
+        explicit flag.
+        """
+        entity_type, sep, _ = entity.partition(":")
+        declared_types = self.config.schema_.known_types
+        if not sep or not declared_types:
+            return
+        known_types = set(declared_types) | self._known_types_in_log()
+        if entity_type not in known_types:
+            if register_new_type:
+                return  # this write's own append registers the type (and its attribute)
+            raise SchemaError(
+                f"{entity_type!r} is not a known entity type. Known: {', '.join(sorted(known_types))}. "
+                "Pass register_new_type=true to register it."
+            )
+        known_attributes = self._known_attributes_for_type(entity_type)
+        if known_attributes and attribute not in known_attributes and not register_new_attribute:
+            raise SchemaError(
+                f"{attribute!r} is not a known attribute for type {entity_type!r}. "
+                f"Known: {', '.join(sorted(known_attributes))}. "
+                "Pass register_new_attribute=true to register it."
+            )
+
+    def _known_types_in_log(self) -> set[str]:
+        types: set[str] = set()
+        for event in self.log.read_all():
+            if event.type != "fact":
+                continue
+            ent = event.payload.get("entity")
+            if ent is None:
+                continue
+            entity_type, sep, _ = ent.partition(":")
+            if sep:
+                types.add(entity_type)
+        return types
+
+    def _known_attributes_for_type(self, entity_type: str) -> set[str]:
+        """The log IS the attribute registry: any attribute already used by a
+        fact whose entity's type prefix matches is "known" -- no separate
+        persisted list to fall out of sync with what was actually written.
+        Mirrors server_tools.recall_history_tool's own raw-log-scan pattern;
+        consistent with this reference implementation's existing "re-derive
+        from the log every time" posture (module docstring point 1).
+        """
+        attributes: set[str] = set()
+        for event in self.log.read_all():
+            if event.type != "fact":
+                continue
+            ent = event.payload.get("entity")
+            attr = event.payload.get("attribute")
+            if ent is None or attr is None:
+                continue
+            if ent.split(":", 1)[0] == entity_type:
+                attributes.add(attr)
+        return attributes
+
+    def _enforce_entity_detail(self, entity: str, entity_detail: str | None) -> None:
+        """spec §B9: entity_detail is required once a bare label has already
+        been disambiguated at least once. No config gate -- this only ever
+        activates once a caller has itself supplied entity_detail for this
+        label before, so a workspace that never uses entity_detail sees zero
+        behavior change (existing_details stays empty forever for it).
+
+        Supplying a detail that matches one on record is a continuation of
+        that same entity (e.g. adding another attribute to "anna#my
+        sister"); a detail that doesn't match any on record is a legitimate,
+        distinct entity newly introduced under the same label. Both are
+        allowed -- only an *absent* detail is rejected, since that's the one
+        case this codebase cannot tell apart from silently colliding with
+        whichever disambiguated entity happens to come back first.
+        """
+        existing = self._known_details_for_label(entity)
+        if not existing or entity_detail is not None:
+            return
+        first = sorted(existing)[0]
+        extra = f" (and {len(existing) - 1} more)" if len(existing) > 1 else ""
+        raise SchemaError(f"{entity!r} exists with detail={first!r}{extra}. Supply a distinguishing entity_detail.")
+
+    def _known_details_for_label(self, label: str) -> set[str]:
+        details: set[str] = set()
+        for event in self.log.read_all():
+            if event.type != "fact":
+                continue
+            if event.payload.get("entity_label") == label and event.payload.get("entity_detail"):
+                details.add(event.payload["entity_detail"])
+        return details
 
     def _current_segment_name(self) -> str:
         return self.log._current.path.name
@@ -128,6 +361,7 @@ class Runtime:
             ledger=self.ledger,
             pass_bonus=self.config.adaptation.pass_bonus,
             stats=self.stats,
+            answer_timeout_s=self.config.verifier.answer_timeout_s,
         )
 
     def close(self) -> None:

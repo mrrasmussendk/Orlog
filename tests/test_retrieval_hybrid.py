@@ -3,9 +3,11 @@ honest exclusions, ranks by the spec §B3 blended score, and tie-breaks
 deterministically by event id.
 """
 
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 
-from orlog.retrieval_hybrid import HashingEmbedder, hybrid_retrieve
+from orlog.retrieval_hybrid import HashingEmbedder, _default_fastembed_cache_dir, hybrid_retrieve, resolve_key
 from orlog.urd import EventLog
 from orlog.verdandi import build_supersession_chains
 
@@ -35,6 +37,17 @@ def test_a_lexically_matching_fact_outranks_an_unrelated_one(tmp_path, make_even
     result = hybrid_retrieve("enterprise subscription plan", NOW, view, events_by_id, HashingEmbedder())
 
     assert result.candidates[0].content == "enterprise subscription"
+
+
+def test_a_fact_missing_value_renders_as_none_like_the_other_l2_backend(tmp_path, make_event):
+    # Matches retrieval.py/heimdall.py's str(payload.get("value")) convention
+    # -- a fact without "value" content must look the same everywhere it's
+    # read, not silently become "" only in this backend.
+    view, events_by_id = _build(tmp_path, make_event, [{"entity": "user:1", "attribute": "plan"}])
+
+    result = hybrid_retrieve("plan", NOW, view, events_by_id, HashingEmbedder(), k=10)
+
+    assert result.candidates[0].content == "None"
 
 
 def test_facts_outside_the_validity_window_are_excluded_and_reported(tmp_path, make_event):
@@ -111,3 +124,121 @@ def test_no_candidates_in_window_returns_empty_with_honest_exclusions(tmp_path, 
 
     assert result.candidates == []
     assert result.excluded["by_validity"] == 1
+
+
+# -- resolve_key(): finds a KEY from free text, never an answer --
+
+
+def test_resolve_key_finds_the_right_key_from_its_own_remembered_text(tmp_path, make_event):
+    view, events_by_id = _build(
+        tmp_path, make_event,
+        [
+            {"entity": "anna", "attribute": "city", "value": "Seattle", "text": "Anna just moved to Seattle last week"},
+            {"entity": "bob", "attribute": "city", "value": "Denver", "text": "Bob has lived in Denver for years"},
+        ],
+    )
+
+    results = resolve_key("where does anna live now", view, events_by_id, HashingEmbedder())
+
+    assert results[0].entity == "anna"
+    assert results[0].attribute == "city"
+
+
+def test_resolve_key_prefers_text_over_the_terse_extracted_value(tmp_path, make_event):
+    # The bare `value` ("Seattle") shares almost no tokens with a natural
+    # phrasing of the query -- it's the remembered `text` that should
+    # actually carry the match.
+    view, events_by_id = _build(
+        tmp_path, make_event,
+        [{"entity": "anna", "attribute": "city", "value": "Seattle", "text": "Anna just moved to Seattle last week"}],
+    )
+
+    results = resolve_key("has anna moved recently", view, events_by_id, HashingEmbedder())
+
+    assert results[0].matched_text == "Anna just moved to Seattle last week"
+
+
+def test_resolve_key_counts_an_old_superseded_mention_as_evidence(tmp_path, make_event):
+    # An out-of-window (superseded) event is still valid evidence the query
+    # is ABOUT this key -- freshness is the caller's job afterwards, not
+    # resolve_key()'s.
+    log = EventLog(tmp_path / "log.jsonl", clock=lambda: datetime(2030, 1, 1, tzinfo=timezone.utc))
+    e1 = log.append(make_event(
+        occurred_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        payload={"entity": "anna", "attribute": "city", "value": "Boston", "text": "Anna lives in Boston"},
+    ))
+    e2 = log.append(make_event(
+        occurred_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        payload={"entity": "anna", "attribute": "city", "value": "Seattle", "text": "Anna moved to Seattle"},
+    ))
+    view, _ = build_supersession_chains([e1, e2], builder="test", built_at=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    events_by_id = {e1.id: e1, e2.id: e2}
+
+    results = resolve_key("anna lives in boston", view, events_by_id, HashingEmbedder())
+
+    assert len(results) == 1
+    assert results[0].entity == "anna"
+    assert results[0].matched_text == "Anna lives in Boston"
+
+
+def test_resolve_key_falls_back_to_value_when_text_is_missing(tmp_path, make_event):
+    view, events_by_id = _build(tmp_path, make_event, [{"entity": "user:1", "attribute": "plan", "value": "pro"}])
+
+    results = resolve_key("pro", view, events_by_id, HashingEmbedder())
+
+    assert results[0].matched_text == "pro"
+
+
+def test_resolve_key_ranks_and_ties_break_deterministically_by_key(tmp_path, make_event):
+    view, events_by_id = _build(
+        tmp_path, make_event,
+        [
+            {"entity": "user:1", "attribute": "plan", "text": "same"},
+            {"entity": "user:2", "attribute": "plan", "text": "same"},
+        ],
+    )
+
+    results_a = resolve_key("", view, events_by_id, HashingEmbedder())
+    results_b = resolve_key("", view, events_by_id, HashingEmbedder())
+
+    keys_a = [(c.entity, c.attribute) for c in results_a]
+    keys_b = [(c.entity, c.attribute) for c in results_b]
+    assert keys_a == keys_b == sorted(keys_a)
+
+
+def test_resolve_key_returns_empty_for_an_empty_view(tmp_path, make_event):
+    log = EventLog(tmp_path / "log.jsonl", clock=lambda: datetime(2030, 1, 1, tzinfo=timezone.utc))
+    e1 = log.append(make_event(occurred_at=datetime(2026, 1, 1, tzinfo=timezone.utc), payload={"note": "no entity here"}))
+    view, _ = build_supersession_chains([e1], builder="test", built_at=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    events_by_id = {e1.id: e1}
+
+    assert resolve_key("anything", view, events_by_id, HashingEmbedder()) == []
+
+
+def test_default_fastembed_cache_dir_is_not_under_the_system_temp_folder():
+    # A temp-folder cache can be wiped by a reboot or a cleanup tool at any
+    # time, silently turning a warm-cache embedder build back into a cold,
+    # network-bound download -- the exact failure mode that caused a
+    # multi-minute recall() hang. The cache must be somewhere persistent.
+    cache_dir = _default_fastembed_cache_dir()
+
+    system_temp = Path(tempfile.gettempdir()).resolve()
+    assert system_temp not in cache_dir.resolve().parents
+    assert cache_dir.resolve() != system_temp
+
+
+def test_resolve_key_surfaces_entity_label_and_detail_when_present(tmp_path, make_event):
+    view, events_by_id = _build(
+        tmp_path, make_event,
+        [{"entity": "anna#coworker-at-acme", "attribute": "city", "value": "Seattle", "text": "Anna (coworker) moved to Seattle"}],
+    )
+    # Simulate what Runtime.remember() stores when entity_detail is used.
+    only_event_id = next(iter(events_by_id))
+    events_by_id[only_event_id] = events_by_id[only_event_id].model_copy(
+        update={"payload": {**events_by_id[only_event_id].payload, "entity_label": "anna", "entity_detail": "coworker-at-acme"}}
+    )
+
+    results = resolve_key("anna moved to seattle", view, events_by_id, HashingEmbedder())
+
+    assert results[0].entity_label == "anna"
+    assert results[0].entity_detail == "coworker-at-acme"

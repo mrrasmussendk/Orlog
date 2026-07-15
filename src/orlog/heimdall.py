@@ -53,6 +53,14 @@ class GroundTruthFact(BaseModel):
     value: str
     valid_from: datetime
     valid_to: datetime
+    # Runtime.remember()'s own write-time verdict: does this fact's
+    # remembered text actually support the value it was recorded with?
+    # Computed once, at write time, from the event's own payload -- never
+    # recomputed here from a claim (that's V4/SUPPORTS' job, a different
+    # check: claim-vs-citation, not text-vs-value). Defaults True for any
+    # event that predates this field or was never given free text, so this
+    # stays backward compatible rather than treating "unknown" as "poisoned".
+    self_supported: bool = True
 
     @property
     def key(self) -> str:
@@ -86,6 +94,7 @@ def build_ground_truth(events: Sequence[Event]) -> dict[str, GroundTruthFact]:
                 value=str(event.payload.get("value")),
                 valid_from=event.occurred_at,
                 valid_to=valid_to,
+                self_supported=event.payload.get("self_supported", True),
             )
     return truth
 

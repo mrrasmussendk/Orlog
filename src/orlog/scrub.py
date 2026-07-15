@@ -34,12 +34,20 @@ _SSN_LIKE = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")  # US SSN shape: NNN-N
 _CPR_LIKE = re.compile(r"(?<!\d)\d{6}-\d{4}(?!\d)")  # Nordic CPR shape: DDMMYY-XXXX
 _KEY_SHAPED = re.compile(r"(?<![A-Za-z0-9])(?:sk|pk|xox[bp])-[A-Za-z0-9_\-]{16,}")
 _PHONE = re.compile(r"(?<!\w)(\+?\d[\d\-\s()]{7,}\d)(?!\w)")
+# NANP-style dot separators (212.555.0147) don't fit the general _PHONE
+# class above -- "." can't just be added to it, since that class also
+# matches IP addresses, decimals, and dotted version strings (192.168.1.100,
+# 3.14159265, 1.2.3.4.5.6.7). This narrower pattern requires the exact
+# 3-3-4 digit grouping, which no dotted-quad IP (4 groups) or plain decimal
+# (2 groups) can match.
+_PHONE_DOTTED = re.compile(r"(?<!\w)(\d{3}\.\d{3}\.\d{4})(?!\w)")
 
 _REGEX_DETECTORS: list[tuple[str, re.Pattern]] = [
     ("EMAIL", _EMAIL),
     ("SSN", _SSN_LIKE),
     ("CPR", _CPR_LIKE),
     ("SECRET", _KEY_SHAPED),
+    ("PHONE", _PHONE_DOTTED),
     ("PHONE", _PHONE),
 ]
 

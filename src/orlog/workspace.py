@@ -17,17 +17,47 @@ requirement -- "concurrent server instances on one workspace MUST be
 prevented" -- for a single machine, single-user workspace; a real
 multi-machine deployment would need a stronger lock, which is exactly the
 kind of thing spec §C4 defers ("distributed/multi-writer logs... deferred").
+
+Because the lock is just a pid file, a process that dies without running
+its __exit__ (killed, crashed, machine rebooted) leaves the lock file
+behind forever. acquire_lock() guards against that by checking whether the
+recorded pid is still alive before honoring the lock -- if it isn't (or the
+file is unreadable/corrupt), the lock is stale and gets reclaimed instead
+of blocking every future launch.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from orlog.errors import LockedError
 
 LOCK_FILENAME = "orlog.lock"
 CONFIG_FILENAME = "orlog.toml"
+
+
+def _pid_alive(pid: int) -> bool:
+    """Best-effort liveness check; stdlib-only so it works without psutil."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, just owned by someone else
+    return True
 
 
 class Workspace:
@@ -74,10 +104,20 @@ class Workspace:
     def acquire_lock(self) -> None:
         """Raise LockedError (E_LOCKED) if another process already holds
         this workspace's lock; otherwise claim it by writing our own pid.
+
+        A lock file whose recorded pid is no longer running (or isn't a
+        parseable pid at all) is stale -- e.g. the previous holder crashed,
+        was killed, or the machine rebooted -- and gets reclaimed rather
+        than blocking forever.
         """
         if self.lock_path.exists():
             holder = self.lock_path.read_text(encoding="utf-8").strip()
-            raise LockedError(f"workspace already locked by pid {holder or '?'} ({self.lock_path})")
+            try:
+                holder_pid = int(holder)
+            except ValueError:
+                holder_pid = None
+            if holder_pid is not None and _pid_alive(holder_pid):
+                raise LockedError(f"workspace already locked by pid {holder} ({self.lock_path})")
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.lock_path.write_text(str(os.getpid()), encoding="utf-8")
 

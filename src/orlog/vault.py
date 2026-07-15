@@ -51,6 +51,10 @@ CREATE TABLE IF NOT EXISTS pseudonyms (
     kind TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS token_counters (
+    kind TEXT PRIMARY KEY,
+    next_seq INTEGER NOT NULL
+);
 """
 
 
@@ -83,6 +87,29 @@ class Vault:
         self._conn = sqlite3.connect(self.path)
         self._conn.executescript(_DDL)
         self._conn.commit()
+        self._migrate_token_counters()
+
+    def _migrate_token_counters(self) -> None:
+        """Backfill token_counters for a vault.sqlite that predates this
+        table, from the highest already-used per-kind token suffix in
+        pseudonyms -- otherwise _next_token() starts back at 1 on a vault
+        that already has e.g. EMAIL_1..EMAIL_5, and the first new EMAIL
+        token collides with pseudonyms' PRIMARY KEY. ON CONFLICT DO NOTHING
+        so a vault already using this table (with real usage past what
+        pseudonyms alone would suggest) is never overwritten downward.
+        """
+        max_seq_by_kind: dict[str, int] = {}
+        for token, kind in self._conn.execute("SELECT token, kind FROM pseudonyms").fetchall():
+            suffix = token.rsplit("_", 1)[-1]
+            if suffix.isdigit():
+                max_seq_by_kind[kind] = max(max_seq_by_kind.get(kind, 0), int(suffix))
+        for kind, max_seq in max_seq_by_kind.items():
+            self._conn.execute(
+                "INSERT INTO token_counters (kind, next_seq) VALUES (?, ?) ON CONFLICT(kind) DO NOTHING",
+                (kind, max_seq + 1),
+            )
+        if max_seq_by_kind:
+            self._conn.commit()
 
     def _lookup_hash(self, cleartext: str) -> str:
         return hmac.new(self._key, cleartext.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -107,8 +134,23 @@ class Vault:
         return token
 
     def _next_token(self, kind: str) -> str:
-        count = self._conn.execute("SELECT COUNT(*) FROM pseudonyms WHERE kind = ?", (kind,)).fetchone()[0]
-        return f"{kind}_{count + 1}"
+        """A monotonically increasing sequence per kind, tracked in its own
+        table -- NOT derived from COUNT(*) of remaining pseudonym rows.
+        COUNT(*) drops when forget() deletes a row, so a later tokenize()
+        of the same kind could recompute a suffix that collides with a
+        still-existing token (e.g. EMAIL_1, EMAIL_2, forget EMAIL_1 ->
+        count back to 1 -> next token would be EMAIL_2 again, a PRIMARY
+        KEY collision, crashing with sqlite3.IntegrityError). This counter
+        only ever goes up, so a forgotten token's number is never reissued.
+        """
+        row = self._conn.execute("SELECT next_seq FROM token_counters WHERE kind = ?", (kind,)).fetchone()
+        next_seq = row[0] if row is not None else 1
+        self._conn.execute(
+            "INSERT INTO token_counters (kind, next_seq) VALUES (?, ?) "
+            "ON CONFLICT(kind) DO UPDATE SET next_seq = excluded.next_seq",
+            (kind, next_seq + 1),
+        )
+        return f"{kind}_{next_seq}"
 
     def resolve(self, token: str) -> str | None:
         """Re-identify a token. Spec §B7: 'only via explicit resolve API,

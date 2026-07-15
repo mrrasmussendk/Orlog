@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -32,8 +33,48 @@ from pathlib import Path
 
 from orlog.config import OrlogConfig, WorkspaceConfig, load_config, save_config
 from orlog.models.event import EventDraft
-from orlog.vault import Vault, generate_key
+from orlog.vault import VAULT_KEY_ENV, Vault, generate_key
 from orlog.workspace import Workspace
+
+
+def _default_claude_code_config_path() -> Path:
+    return Path.home() / ".claude.json"
+
+
+def _orlog_command() -> str:
+    """Best-effort path to the currently-running `orlog` executable, for
+    embedding as the spawned MCP server's `command`."""
+    exe = shutil.which("orlog")
+    return str(Path(exe).resolve()) if exe else str(Path(sys.argv[0]).resolve())
+
+
+def write_claude_code_mcp_config(
+    ws: Workspace, vault_key: str, *, server_name: str = "orlog", config_path: Path | None = None
+) -> Path:
+    """Register this workspace as an MCP server in Claude Code's config.
+
+    Backs up the existing file first: it also holds unrelated Claude Code
+    state (session history, prefs), so a failed/partial rewrite must not
+    lose that.
+    """
+    path = config_path or _default_claude_code_config_path()
+    if path.exists():
+        shutil.copy2(path, path.with_suffix(path.suffix + ".bak"))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path} exists but is not valid JSON ({exc}) -- fix or remove it, or add the mcpServers entry yourself") from exc
+    else:
+        data = {}
+
+    data.setdefault("mcpServers", {})[server_name] = {
+        "type": "stdio",
+        "command": _orlog_command(),
+        "args": ["serve", str(ws.root.resolve())],
+        "env": {VAULT_KEY_ENV: vault_key},
+    }
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return path
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -41,20 +82,49 @@ def cmd_init(args: argparse.Namespace) -> int:
     ws = Workspace(root)
     ws.scaffold()
 
-    if ws.config_path.exists():
-        print(f"{ws.config_path} already exists, leaving it alone.")
-    else:
+    freshly_created = not ws.config_path.exists()
+    if freshly_created:
         config = OrlogConfig(workspace=WorkspaceConfig(name=args.name or root.resolve().name))
         save_config(config, ws.config_path)
         print(f"wrote {ws.config_path}")
+    else:
+        print(f"{ws.config_path} already exists, leaving it alone.")
 
     print("Workspace initialized.")
-    print("Set this before running `orlog serve` (a vault key, never written to disk by init):")
-    print(f"  ORLOG_VAULT_KEY={generate_key()}")
+
+    if not freshly_created:
+        # A pre-existing workspace already has a vault encrypted under some
+        # other key -- generating a new one here and (with --claude-code)
+        # writing it into a live config would silently point Claude Code at
+        # a key that can't open this vault.
+        if args.claude_code:
+            print(
+                "This workspace already existed, so no new vault key was generated. "
+                "orlog init doesn't know the original key, and writing a fresh one "
+                "into Claude Code's config would break the existing vault -- set "
+                "ORLOG_VAULT_KEY yourself in that mcpServers entry's env block."
+            )
+        return 0
+
+    vault_key = generate_key()
+    if args.claude_code:
+        server_name = args.claude_code_name or "orlog"
+        try:
+            config_path = write_claude_code_mcp_config(ws, vault_key, server_name=server_name)
+        except ValueError as exc:
+            print(f"Workspace and vault key were created, but registering with Claude Code failed: {exc}", file=sys.stderr)
+            print(f"  ORLOG_VAULT_KEY={vault_key}", file=sys.stderr)
+            return 2
+        print(f"Registered '{server_name}' as an MCP server in {config_path}, including the vault key.")
+        print("Restart Claude Code for it to pick up the new server.")
+    else:
+        print("Set this before running `orlog serve` (a vault key, never written to disk by init):")
+        print(f"  ORLOG_VAULT_KEY={vault_key}")
     return 0
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
+    from orlog.errors import RetrieverUnavailableError
     from orlog.runtime import Runtime
     from orlog.server import build_server
 
@@ -63,6 +133,23 @@ def cmd_serve(args: argparse.Namespace) -> int:
     with ws:
         runtime = Runtime(ws, config)
         try:
+            # Warm the embedder here, off the request path -- Runtime.embedder
+            # already bounds a cold/network-bound build with a hard timeout
+            # (config.retrieval.embedder_build_timeout_s), so this costs at
+            # most that long once at startup instead of stalling the first
+            # free-text recall() call. Best-effort: a failed/timed-out build
+            # here doesn't stop the server from serving exact-key recalls
+            # (which never touch the embedder) -- a later free-text recall()
+            # just retries lazily and abstains EMBEDDER_UNAVAILABLE per call
+            # until it succeeds, same as before this preload existed.
+            try:
+                runtime.embedder
+            except RetrieverUnavailableError as exc:
+                print(
+                    f"warning: embedder did not become ready at startup ({exc}); "
+                    "recall() will retry lazily and abstain (EMBEDDER_UNAVAILABLE) until it succeeds",
+                    file=sys.stderr,
+                )
             build_server(runtime).run(transport="stdio")
         finally:
             runtime.close()
@@ -152,6 +239,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("init", help="scaffold a new workspace")
     p.add_argument("path", nargs="?", default=".")
     p.add_argument("--name")
+    p.add_argument(
+        "--claude-code",
+        action="store_true",
+        help="also register this workspace as an MCP server in Claude Code's config (~/.claude.json), including the vault key",
+    )
+    p.add_argument("--claude-code-name", default=None, help="mcpServers entry name to use (default: 'orlog')")
     p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("serve", help="run the MCP stdio server")

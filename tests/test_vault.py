@@ -42,6 +42,39 @@ def test_forget_deletes_the_row_and_resolve_then_fails(vault):
     assert vault.forget(token) is False  # already gone
 
 
+def test_token_numbers_are_never_reissued_after_forget(vault):
+    t1 = vault.tokenize("alice@example.com", kind="EMAIL")
+    assert t1 == "EMAIL_1"
+    vault.forget(t1)
+
+    t2 = vault.tokenize("bob@example.com", kind="EMAIL")
+
+    assert t2 != t1
+    assert t2 == "EMAIL_2"
+
+
+def test_reopening_a_pre_token_counters_vault_does_not_collide(tmp_path):
+    """Simulates a vault.sqlite written before token_counters existed:
+    pseudonym rows present (EMAIL_1, EMAIL_2), but no token_counters row for
+    "EMAIL" -- reopening it (which runs the migration) and tokenizing a new
+    email must not try to re-mint EMAIL_1 and crash on the PRIMARY KEY.
+    """
+    path = tmp_path / "vault.sqlite"
+    v1 = Vault(path, key=bytes(range(32)))
+    v1.tokenize("alice@example.com", kind="EMAIL")
+    v1.tokenize("bob@example.com", kind="EMAIL")
+    # Erase the counter memory to simulate a genuinely pre-migration file --
+    # only pseudonyms rows survive, exactly what an old vault.sqlite has.
+    v1._conn.execute("DELETE FROM token_counters")
+    v1._conn.commit()
+    v1.close()
+
+    v2 = Vault(path, key=bytes(range(32)))
+    token = v2.tokenize("carol@example.com", kind="EMAIL")
+
+    assert token == "EMAIL_3"  # not a re-minted EMAIL_1/EMAIL_2
+
+
 def test_ciphertext_on_disk_never_contains_the_cleartext(tmp_path):
     path = tmp_path / "vault.sqlite"
     v = Vault(path, key=bytes(range(32)))

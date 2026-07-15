@@ -123,6 +123,11 @@ class SegmentedLog:
         self._current = EventLog(
             self._segment_paths[-1], clock=self._clock, initial_prev_hash=self._hash_before_current()
         )
+        # Running count of events in the current segment, so
+        # current_segment_offset() is O(1) per append instead of re-reading
+        # and re-parsing the whole segment every time -- computed once here
+        # (and again on rotation below), never inside append() itself.
+        self._current_segment_count = len(self._current.read_all())
 
     def _hash_before_current(self) -> str | None:
         if len(self._segment_paths) <= 1:
@@ -136,13 +141,22 @@ class SegmentedLog:
             new_path = self.events_dir / f"log-{len(self._segment_paths) + 1:05d}.jsonl"
             self._segment_paths.append(new_path)
             self._current = EventLog(new_path, clock=self._clock, initial_prev_hash=last_hash)
-        return self._current.append(draft)
+            self._current_segment_count = 0
+        event = self._current.append(draft)
+        self._current_segment_count += 1
+        return event
 
     def read_all(self) -> list[Event]:
         events: list[Event] = []
         for path in self._segment_paths:
             events.extend(EventLog(path, clock=self._clock).read_all())
         return events
+
+    def current_segment_offset(self) -> int:
+        """0-indexed line offset of the most recently appended event within
+        the current segment -- matches iter_with_location()'s numbering, so
+        a live index_event() call stays consistent with a full rebuild()."""
+        return self._current_segment_count - 1
 
     def get(self, event_id: str) -> Event | None:
         for path in reversed(self._segment_paths):  # newest segment first: recent lookups are the common case
