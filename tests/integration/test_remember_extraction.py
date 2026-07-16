@@ -73,12 +73,14 @@ def _anthropic_tools(mcp):
     ]
 
 
-def _ask_model_to_call_a_tool(mcp, user_message):
+def _ask_model_to_call_tools(mcp, user_message):
     """Sends `user_message` to a real Claude model with the exact tool
-    schemas server.py already ships, and returns the (name, input) of the
-    first tool_use block in its response. This is the point of these
-    tests: proving the EXISTING descriptions are enough on their own, not a
-    specially-crafted test-only prompt.
+    schemas server.py already ships, and returns EVERY (name, input) tool
+    call in its response, in order -- for scenarios where one message
+    plausibly produces more than one tool call (e.g. two facts in one
+    sentence). This is the point of these tests: proving the EXISTING
+    descriptions are enough on their own, not a specially-crafted
+    test-only prompt.
     """
     client = anthropic.Anthropic()
     response = client.messages.create(
@@ -90,8 +92,14 @@ def _ask_model_to_call_a_tool(mcp, user_message):
     )
     tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
     assert tool_use_blocks, f"model did not call any tool; response was: {response.content!r}"
-    block = tool_use_blocks[0]
-    return block.name, block.input
+    return [(b.name, b.input) for b in tool_use_blocks]
+
+
+def _ask_model_to_call_a_tool(mcp, user_message):
+    """Returns just the first tool call the model made -- see
+    _ask_model_to_call_tools for scenarios that need every call.
+    """
+    return _ask_model_to_call_tools(mcp, user_message)[0]
 
 
 def _execute_tool_call(mcp, name, arguments):
@@ -169,6 +177,125 @@ def test_two_same_named_entities_get_distinguishing_entity_detail(mcp):
     answer = _execute_tool_call(mcp, recall_name, recall_args)
     assert answer["verified"] is True
     assert "seattle" in answer["claim"].lower()
+
+
+def test_a_negated_dietary_fact_keeps_attribute_generic_and_queryable(mcp):
+    # Same class of risk as the allergy scenario above, from a different
+    # angle (negation, different domain): a phrasing like "doesn't eat X"
+    # invites folding X into the attribute name (e.g. attribute="no_gluten",
+    # value="true") just as readily as "is allergic to X" did originally.
+    name, arguments = _ask_model_to_call_a_tool(mcp, "Marc doesn't eat gluten.")
+
+    assert name == "remember"
+    assert "marc" in arguments["entity"].lower()
+    assert "gluten" in arguments["value"].lower()
+
+    _execute_tool_call(mcp, name, arguments)
+    recall_name, recall_arguments = _ask_model_to_call_a_tool(mcp, "What can't Marc eat?")
+    assert recall_name == "recall"
+    answer = _execute_tool_call(mcp, recall_name, recall_arguments)
+    assert answer["verified"] is True
+    assert "gluten" in answer["claim"].lower()
+
+
+def test_a_preference_statement_becomes_a_well_formed_remember_call(mcp):
+    name, arguments = _ask_model_to_call_a_tool(mcp, "Anna likes hiking.")
+
+    assert name == "remember"
+    assert "anna" in arguments["entity"].lower()
+    assert "hiking" in arguments["value"].lower()
+
+    _execute_tool_call(mcp, name, arguments)
+    recall_name, recall_arguments = _ask_model_to_call_a_tool(mcp, "What does Anna like to do?")
+    assert recall_name == "recall"
+    answer = _execute_tool_call(mcp, recall_name, recall_arguments)
+    assert answer["verified"] is True
+    assert "hiking" in answer["claim"].lower()
+
+
+def test_two_facts_in_one_sentence_produce_two_separate_remember_calls(mcp):
+    # remember()'s schema holds exactly one attribute=value pair per call,
+    # so two distinct facts about the same entity in one sentence should
+    # become two separate remember() calls, not one call that drops a fact
+    # or crams both into a single value.
+    calls = _ask_model_to_call_tools(mcp, "Marc lives in Berlin and works as a software engineer.")
+    remember_calls = [(name, args) for name, args in calls if name == "remember"]
+
+    assert len(remember_calls) >= 2, f"expected 2 separate remember() calls, got: {calls!r}"
+    assert all("marc" in args["entity"].lower() for _, args in remember_calls)
+    values = " ".join(args["value"].lower() for _, args in remember_calls)
+    assert "berlin" in values
+    assert "engineer" in values
+
+
+def test_a_correction_extracts_only_the_new_value_not_the_superseded_one(mcp, runtime):
+    # Two prior attempts established: (1) establishing the fact only in
+    # orlog's own store isn't enough -- the model never sees that store
+    # directly, only the conversation; (2) even a self-contained update
+    # directive isn't enough on its own -- the model wrote the update under
+    # its OWN chosen entity casing/attribute name ("Anna"/"location")
+    # instead of the one already on record ("anna"/"city"), fragmenting the
+    # fact into two disconnected, tied-ambiguous keys. The realistic fix:
+    # give the model an actual PRIOR TURN in the conversation where it
+    # already looked the fact up (and so has genuinely seen "anna.city"),
+    # then ask it to correct that same fact -- not just an isolated message
+    # with no conversational history.
+    remember_tool(runtime, "Anna lives in Seattle", entity="anna", attribute="city", value="Seattle")
+
+    client = anthropic.Anthropic()
+    tools = _anthropic_tools(mcp)
+    messages = [{"role": "user", "content": "Where does Anna live?"}]
+
+    first_response = client.messages.create(model=MODEL, max_tokens=500, system=SYSTEM_PROMPT, tools=tools, messages=messages)
+    first_tool_use = [b for b in first_response.content if b.type == "tool_use"]
+    assert first_tool_use, f"model did not call any tool for the initial question; response was: {first_response.content!r}"
+    first_call = first_tool_use[0]
+    assert first_call.name == "recall"
+    first_answer = _execute_tool_call(mcp, first_call.name, first_call.input)
+    assert first_answer["verified"] is True
+    assert "seattle" in first_answer["claim"].lower()
+
+    messages.append({"role": "assistant", "content": first_response.content})
+    messages.append({
+        "role": "user",
+        "content": [
+            {"type": "tool_result", "tool_use_id": first_call.id, "content": json.dumps(first_answer)},
+            {"type": "text", "text": "She just moved to Chicago, she's no longer in Seattle. Please update your records."},
+        ],
+    })
+
+    second_response = client.messages.create(model=MODEL, max_tokens=500, system=SYSTEM_PROMPT, tools=tools, messages=messages)
+    second_tool_use = [b for b in second_response.content if b.type == "tool_use"]
+    assert second_tool_use, f"model did not call any tool for the correction; response was: {second_response.content!r}"
+    second_call = second_tool_use[0]
+
+    assert second_call.name == "remember"
+    arguments = second_call.input
+    assert "anna" in arguments["entity"].lower()
+    assert "chicago" in arguments["value"].lower()
+    assert "seattle" not in arguments["value"].lower()
+
+    _execute_tool_call(mcp, second_call.name, arguments)
+    recall_name, recall_arguments = _ask_model_to_call_a_tool(mcp, "Where does Anna live now?")
+    assert recall_name == "recall"
+    answer = _execute_tool_call(mcp, recall_name, recall_arguments)
+    assert answer["verified"] is True
+    assert "chicago" in answer["claim"].lower()
+
+
+def test_a_numeric_fact_becomes_a_well_formed_remember_call(mcp):
+    name, arguments = _ask_model_to_call_a_tool(mcp, "Marc is 34 years old.")
+
+    assert name == "remember"
+    assert "marc" in arguments["entity"].lower()
+    assert "34" in arguments["value"]
+
+    _execute_tool_call(mcp, name, arguments)
+    recall_name, recall_arguments = _ask_model_to_call_a_tool(mcp, "How old is Marc?")
+    assert recall_name == "recall"
+    answer = _execute_tool_call(mcp, recall_name, recall_arguments)
+    assert answer["verified"] is True
+    assert "34" in answer["claim"]
 
 
 def test_a_natural_language_question_becomes_a_well_formed_recall_call(mcp, runtime):
