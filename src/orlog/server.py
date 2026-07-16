@@ -63,6 +63,17 @@ def build_server(runtime: Runtime) -> FastMCP:
         allergic to?", can guess an attribute name that already contains
         the answer.
 
+        When correcting or updating a fact already on record -- e.g. the
+        user just told you something that supersedes a value recall()
+        previously showed you -- reuse the EXACT `entity` and `attribute`
+        strings that prior answer was keyed on (a recall() reply built from
+        key "anna.city" means the correction is also entity="anna",
+        attribute="city") rather than choosing new wording of your own
+        ("location", "current_city", ...). A different attribute string does
+        NOT update the old fact -- it creates a second, disconnected one, so
+        a later free-text recall() can end up answering from whichever of
+        the two ranks higher, not necessarily the newer one.
+
         `value` MUST appear verbatim (or as a close substring) inside
         `text` -- e.g. text="Marc doesn't eat gluten.", value="gluten", NOT
         value="gluten-free" (a paraphrase that never literally appears in
