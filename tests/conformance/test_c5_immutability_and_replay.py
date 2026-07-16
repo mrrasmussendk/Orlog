@@ -97,4 +97,4 @@ def test_replay_is_still_byte_identical_across_a_segment_rotation_boundary(tmp_p
     view_b, pv_b = build_supersession_chains(log.read_all(), builder="test", built_at=BUILT_AT, version=1)
 
     assert view_a.model_dump_json() == view_b.model_dump_json()
-    assert pv_b.model_dump_json() == pv_b.model_dump_json()
+    assert pv_a.model_dump_json() == pv_b.model_dump_json()
