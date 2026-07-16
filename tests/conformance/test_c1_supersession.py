@@ -78,3 +78,21 @@ def test_no_answer_is_ever_derived_from_a_superseded_version(make_log, make_even
     assert result.verified is True
     assert "free" not in result.claim
     assert result.claim == "user:1.plan = pro"
+
+
+def test_two_facts_at_the_exact_same_instant_resolve_deterministically(make_log, make_event):
+    # verdandi's sort key is (occurred_at, recorded_at, id) -- with the
+    # fixed test clock every make_log() event shares the same recorded_at
+    # too, so ties resolve by id (insertion order, for monotonically
+    # generated ULIDs). The FIRST fact's validity window collapses to
+    # zero-width [T1, T1) and becomes permanently unreachable; the SECOND
+    # wins at exactly T1, deterministically -- not by insertion-order luck.
+    log = make_log()
+    log.append(make_event(occurred_at=T1, payload={"entity": "user:1", "attribute": "plan", "value": "first"}))
+    log.append(make_event(occurred_at=T1, payload={"entity": "user:1", "attribute": "plan", "value": "second"}))
+
+    pipeline = _build_pipeline(log)
+
+    result = pipeline.answer("q-tie", "user:1", "plan", T1, now=NOW)
+    assert result.verified is True
+    assert result.claim == "user:1.plan = second"
