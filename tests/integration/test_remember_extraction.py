@@ -20,7 +20,6 @@ import asyncio
 import json
 import os
 
-import anthropic
 import pytest
 
 from orlog.config import OrlogConfig, RetrievalConfig, WorkspaceConfig
@@ -29,6 +28,8 @@ from orlog.server import build_server
 from orlog.server_tools import remember_tool
 from orlog.vault import generate_key
 from orlog.workspace import Workspace
+
+anthropic = pytest.importorskip("anthropic")
 
 pytestmark = [
     pytest.mark.integration,

@@ -6,10 +6,11 @@ monkeypatches the SDK's client class itself, so nothing here ever makes a
 network call or needs a real API key.
 """
 
-import httpx
 import pytest
 
 from orlog.huginn_llm import AnthropicCompletion, OpenAICompletion
+
+httpx = pytest.importorskip("httpx")
 
 
 # -- Anthropic --

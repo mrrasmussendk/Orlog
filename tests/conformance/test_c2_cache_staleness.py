@@ -4,7 +4,7 @@ PASS criterion (spec table): 0 stale answers served; every invalidated
 route is re-derived or abstained; >=1 still-valid route is served from
 cache (proving reuse works).
 
-Two scenarios, matching the two independent invalidation paths spec §B6
+Three scenarios, matching the independent invalidation paths spec §B6
 gives the cache:
 
 1. Reuse within a stable truth_version: a second identical query is served
@@ -20,6 +20,11 @@ gives the cache:
    out before the one permitted re-derivation), and the unchanged fact is
    still answered correctly via fresh re-derivation. 0 stale answers are
    served either way -- reuse is a performance property, not a trust one.
+
+3. A per-key verification-failure eviction: a cached assertion that fails
+   re-verification is evicted on its own key alone, independent of the
+   truth_version-rotation path in scenario 2 -- an untouched neighbor key
+   is still served straight from cache while the changed key is re-derived.
 """
 
 from datetime import datetime, timezone

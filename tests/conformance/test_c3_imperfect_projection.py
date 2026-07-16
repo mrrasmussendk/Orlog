@@ -97,9 +97,9 @@ def test_corrupted_grouping_never_serves_a_confidently_wrong_answer(make_log, ma
 
 
 def test_corruption_at_exactly_the_documented_30_percent_boundary_still_meets_the_90_percent_floor(make_log, make_event):
-    # The existing test above corrupts 4 of 10 (40%, per its own CORRUPT_EVERY
-    # comment) -- this pins down the literal boundary the spec table states
-    # (30%/90%) rather than only a comfortably-inside-the-margin case.
+    # The existing test above corrupts 4 of 10 (40%, despite its own comment
+    # saying ~30%) -- this pins down the literal boundary the spec table
+    # states (30%/90%) rather than only a comfortably-inside-the-margin case.
     log = _build_log(make_log, make_event)
     events = log.read_all()
 

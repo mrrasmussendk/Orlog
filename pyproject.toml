@@ -37,6 +37,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = ["-m", "not integration"]
 markers = [
     "integration: makes real Anthropic API calls; requires ANTHROPIC_API_KEY, skipped otherwise",
 ]
