@@ -141,3 +141,47 @@ def test_a_fuzzy_allergy_statement_becomes_a_well_formed_remember_call(mcp):
     answer = _execute_tool_call(mcp, recall_name, recall_arguments)
     assert answer["verified"] is True
     assert "shellfish" in answer["claim"].lower()
+
+
+def test_two_same_named_entities_get_distinguishing_entity_detail(mcp):
+    name1, args1 = _ask_model_to_call_a_tool(
+        mcp, "Remember this: Anna, my coworker at Acme, moved to Seattle."
+    )
+    assert name1 == "remember"
+    assert "anna" in args1["entity"].lower()
+    assert "seattle" in args1["value"].lower()
+    _execute_tool_call(mcp, name1, args1)
+
+    name2, args2 = _ask_model_to_call_a_tool(
+        mcp, "Remember this too: Anna, my college roommate, moved to Chicago."
+    )
+    assert name2 == "remember"
+    assert "anna" in args2["entity"].lower()
+    assert "chicago" in args2["value"].lower()
+    # The two Annas must stay distinguishable -- either via entity_detail,
+    # or some other entity string the model chose that keeps them apart.
+    assert args1.get("entity_detail") != args2.get("entity_detail") or args1["entity"] != args2["entity"]
+    _execute_tool_call(mcp, name2, args2)
+
+    recall_name, recall_args = _ask_model_to_call_a_tool(mcp, "Where does my coworker Anna from Acme live now?")
+    assert recall_name == "recall"
+    answer = _execute_tool_call(mcp, recall_name, recall_args)
+    assert answer["verified"] is True
+    assert "seattle" in answer["claim"].lower()
+
+
+def test_a_natural_language_question_becomes_a_well_formed_recall_call(mcp, runtime):
+    # The reverse direction: the WRITE side is set up deterministically
+    # (no live call needed for that part) so only the thing actually under
+    # test -- does a natural-language question produce a correct recall()
+    # call -- costs one real model call.
+    remember_tool(
+        runtime, "Anna moved to Copenhagen last spring", entity="anna", attribute="city", value="Copenhagen",
+    )
+
+    name, arguments = _ask_model_to_call_a_tool(mcp, "Do you know where Anna lives?")
+
+    assert name == "recall"
+    answer = _execute_tool_call(mcp, name, arguments)
+    assert answer["verified"] is True
+    assert "copenhagen" in answer["claim"].lower()
