@@ -94,3 +94,43 @@ def test_corrupted_grouping_never_serves_a_confidently_wrong_answer(make_log, ma
 
     uncorrupted_count = ENTITY_COUNT - len(corrupted_entities)
     assert correct_on_uncorrupted / uncorrupted_count >= 0.90
+
+
+def test_corruption_at_exactly_the_documented_30_percent_boundary_still_meets_the_90_percent_floor(make_log, make_event):
+    # The existing test above corrupts 4 of 10 (40%, per its own CORRUPT_EVERY
+    # comment) -- this pins down the literal boundary the spec table states
+    # (30%/90%) rather than only a comfortably-inside-the-margin case.
+    log = _build_log(make_log, make_event)
+    events = log.read_all()
+
+    view, pv = build_supersession_chains(events, builder="test", built_at=NOW)
+    truth = build_ground_truth(events)
+
+    corrupted_entities = {0, 1, 2}  # exactly 3 of 10 == 30%
+    corrupted_keys = {f"user:{i}::plan" for i in corrupted_entities}
+    view = _corrupt_chains(view, corrupted_keys)
+
+    pipeline = Pipeline(
+        view=view,
+        events_by_id={e.id: e for e in events},
+        projection_version=pv,
+        cache=RouteCache(),
+        deriver=ScriptedDeriver(),
+        verifier=Heimdall(truth, truth_version="test-v1"),
+        ledger=OutcomeLedger(log),
+    )
+
+    wrong_answers_served = []
+    correct_on_uncorrupted = 0
+    for i in range(ENTITY_COUNT):
+        result = pipeline.answer(f"q{i}", f"user:{i}", "plan", NOW, now=NOW)
+        expected = f"user:{i}.plan = plan-{i}"
+        if i in corrupted_entities:
+            if result.verified and result.claim != expected:
+                wrong_answers_served.append((i, result.claim))
+        elif result.verified and result.claim == expected:
+            correct_on_uncorrupted += 1
+
+    assert wrong_answers_served == []
+    uncorrupted_count = ENTITY_COUNT - len(corrupted_entities)
+    assert correct_on_uncorrupted / uncorrupted_count >= 0.90
