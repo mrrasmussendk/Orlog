@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from orlog.config import OrlogConfig, RetrievalConfig, WorkspaceConfig
+from orlog.config import OrlogConfig, RetrievalConfig, SchemaConfig, WorkspaceConfig
+from orlog.retrieval_hybrid import KeyCandidate
 from orlog.runtime import Runtime
 from orlog.server_tools import (
     check_action_tool,
@@ -418,3 +419,106 @@ def test_list_entities_prefix_and_limit_filter_and_truncate(runtime):
 
     limited = list_entities_tool(runtime, limit=1)
     assert len(limited["entities"]) == 1
+
+
+def test_entity_detail_on_a_first_not_yet_disambiguated_write_is_accepted(runtime):
+    result = remember_tool(
+        runtime, "Anna the coworker moved to Seattle", occurred_at=T1,
+        entity="anna", attribute="city", value="Seattle", entity_detail="coworker at Acme",
+    )
+    assert "event_id" in result
+    answer = recall_tool(runtime, "anna#coworker at Acme.city", as_of=T2)
+    assert answer["verified"] is True
+    assert answer["claim"] == "anna#coworker at Acme.city = Seattle"
+
+
+def test_register_new_type_and_register_new_attribute_together_for_a_brand_new_type(tmp_path):
+    config = OrlogConfig(
+        workspace=WorkspaceConfig(name="schemaproject2"),
+        retrieval=RetrievalConfig(embedder="hashing"),
+        schema_=SchemaConfig(known_types=["user"]),
+    )
+    rt = Runtime(Workspace(tmp_path / "schemaproject2"), config)
+    result = remember_tool(
+        rt, "x", occurred_at=T1, entity="contact:1", attribute="email", value="v",
+        register_new_type=True, register_new_attribute=True,
+    )
+    assert "event_id" in result
+    rt.close()
+
+
+def test_register_new_attribute_for_an_already_known_type(tmp_path):
+    from orlog.errors import SchemaError
+
+    config = OrlogConfig(
+        workspace=WorkspaceConfig(name="schemaproject3"),
+        retrieval=RetrievalConfig(embedder="hashing"),
+        schema_=SchemaConfig(known_types=["user"]),
+    )
+    rt = Runtime(Workspace(tmp_path / "schemaproject3"), config)
+    remember_tool(rt, "x", occurred_at=T1, entity="user:1", attribute="plan", value="pro")
+
+    with pytest.raises(SchemaError):
+        remember_tool(rt, "x", occurred_at=T1, entity="user:2", attribute="shoe_size", value="42")
+
+    result = remember_tool(rt, "x", occurred_at=T1, entity="user:2", attribute="shoe_size", value="42", register_new_attribute=True)
+    assert "event_id" in result
+    rt.close()
+
+
+def test_invalid_occurred_at_string_raises_a_clear_value_error(runtime):
+    with pytest.raises(ValueError):
+        remember_tool(runtime, text="x", occurred_at="not-a-date", entity="e", attribute="a", value="v")
+
+
+def test_recall_query_with_more_than_one_dot_splits_on_the_last_one(runtime):
+    remember_tool(runtime, "dark theme", occurred_at=T1, entity="user:1.settings", attribute="theme", value="dark")
+
+    result = recall_tool(runtime, "user:1.settings.theme", as_of=T2)
+
+    assert result["verified"] is True
+    assert result["claim"] == "user:1.settings.theme = dark"
+
+
+def test_recall_is_case_sensitive_on_the_exact_key_lookup_path(runtime):
+    remember_tool(runtime, "plan is pro", occurred_at=T1, entity="User:1", attribute="Plan", value="pro")
+
+    exact_case = recall_tool(runtime, "User:1.Plan", as_of=T2)
+    different_case = recall_tool(runtime, "user:1.plan", as_of=T2)
+
+    assert exact_case["verified"] is True
+    assert different_case["abstained"] is True
+    assert different_case["reasons"] == ["NO_CANDIDATES"]
+
+
+def test_recall_tool_ambiguity_margin_boundary_is_inclusive(runtime, monkeypatch):
+    remember_tool(runtime, "seed fact", occurred_at=T1, entity="seed", attribute="x", value="y")
+    import orlog.server_tools as server_tools_module
+
+    margin = runtime.config.retrieval.ambiguity_margin
+    candidates = [
+        KeyCandidate(entity="a", attribute="attr", event_id="ev-a", matched_text="a", score=1.0),
+        KeyCandidate(entity="b", attribute="attr", event_id="ev-b", matched_text="b", score=1.0 * margin),
+    ]
+    monkeypatch.setattr(server_tools_module, "resolve_key", lambda *a, **k: candidates)
+
+    result = recall_tool(runtime, "free text query", as_of=T2)
+
+    assert result["reasons"] == ["AMBIGUOUS"]
+    assert len(result["candidates"]) == 2
+
+
+def test_recall_tool_ambiguity_margin_boundary_excludes_a_runner_up_just_below_it(runtime, monkeypatch):
+    remember_tool(runtime, "seed fact", occurred_at=T1, entity="seed", attribute="x", value="y")
+    import orlog.server_tools as server_tools_module
+
+    margin = runtime.config.retrieval.ambiguity_margin
+    candidates = [
+        KeyCandidate(entity="a", attribute="attr", event_id="ev-a", matched_text="a", score=1.0),
+        KeyCandidate(entity="b", attribute="attr", event_id="ev-b", matched_text="b", score=1.0 * margin - 0.05),
+    ]
+    monkeypatch.setattr(server_tools_module, "resolve_key", lambda *a, **k: candidates)
+
+    result = recall_tool(runtime, "free text query", as_of=T2)
+
+    assert result["reasons"] != ["AMBIGUOUS"]
