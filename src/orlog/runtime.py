@@ -192,7 +192,7 @@ class Runtime:
         # plausible" discipline as _enforce_schema/_enforce_entity_detail
         # below: an actionable error now, instead of a silent, permanent gap
         # discovered only much later at read time.
-        if entity is None or attribute is None or value is None:
+        if not entity or not attribute or not value:
             raise SchemaError(
                 "remember() requires entity, attribute, and value together to store a queryable "
                 "fact -- text-only memories are not retrievable via recall()/recall_history() in "

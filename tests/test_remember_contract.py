@@ -67,3 +67,35 @@ def test_3_a_full_write_round_trips_through_recall_by_the_key_it_implies(runtime
 
     assert answer["verified"] is True
     assert answer["claim"] == "person:mikkel.office_preference = dislikes open-plan"
+
+
+@pytest.mark.parametrize("missing", ["entity", "attribute", "value"])
+def test_4_empty_string_entity_attribute_or_value_is_rejected_same_as_none(runtime, missing):
+    # Found during test-coverage work (2026-07-16): Runtime.remember()'s
+    # guard only checked `is None`, so an empty string silently bypassed it
+    # and produced the exact same "dead-end memory" this file exists to
+    # prevent -- a durable write, a success code, and a key that resolves to
+    # nothing on recall. Fixed alongside this test (see runtime.py).
+    fields = {"entity": "person:empty", "attribute": "office_preference", "value": "remote"}
+    fields[missing] = ""
+
+    with pytest.raises(SchemaError):
+        remember_tool(runtime, text="Some text.", **fields)
+
+
+def test_5_partial_write_entity_and_value_with_no_attribute_is_rejected(runtime):
+    with pytest.raises(SchemaError) as exc_info:
+        remember_tool(runtime, entity="person:mikkel", value="dislikes open-plan", text="Mikkel dislikes open-plan offices.")
+    assert "entity" in str(exc_info.value)
+    assert "attribute" in str(exc_info.value)
+    assert "value" in str(exc_info.value)
+    answer = recall_tool(runtime, "person:mikkel.office_preference")
+    assert answer["abstained"] is True
+
+
+def test_6_partial_write_attribute_and_value_with_no_entity_is_rejected(runtime):
+    with pytest.raises(SchemaError) as exc_info:
+        remember_tool(runtime, attribute="office_preference", value="dislikes open-plan", text="Mikkel dislikes open-plan offices.")
+    assert "entity" in str(exc_info.value)
+    assert "attribute" in str(exc_info.value)
+    assert "value" in str(exc_info.value)
