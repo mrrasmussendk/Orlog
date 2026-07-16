@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import pytest
 
 from orlog.config import OrlogConfig, RetrievalConfig, SchemaConfig, WorkspaceConfig
+from orlog.errors import SchemaError
 from orlog.retrieval_hybrid import KeyCandidate
 from orlog.runtime import Runtime
 from orlog.server_tools import (
@@ -116,6 +117,33 @@ def test_recall_tool_fails_fast_on_a_self_contradictory_fact(runtime):
     result_again = recall_tool(runtime, "person:trap.city", as_of=T2)
     assert result_again["verified"] is False
     assert result_again["reasons"] == ["UNSUPPORTED_BY_SOURCE"]
+
+
+def test_recall_tool_passes_and_cites_the_evidence_span_for_a_paraphrased_value(runtime):
+    # value ("loves Porto") never appears verbatim in text -- only the
+    # separately-supplied evidence_span does. The citation excerpt must be
+    # the span, not the value, since the span is what's actually grounded.
+    remember_tool(
+        runtime, "Marc adores the city of Porto lately.", occurred_at=T1,
+        entity="marc", attribute="likes", value="loves Porto",
+        evidence_span="adores the city of Porto",
+    )
+
+    result = recall_tool(runtime, "marc.likes", as_of=T2)
+
+    assert result["verified"] is True
+    assert result["claim"] == "marc.likes = loves Porto"
+    assert result["citations"][0]["excerpt"] == "adores the city of Porto"
+
+
+def test_remember_tool_rejects_a_fabricated_evidence_span(runtime):
+    with pytest.raises(SchemaError) as exc_info:
+        remember_tool(
+            runtime, "Kim lives in Oslo", occurred_at=T1,
+            entity="kim", attribute="city", value="Oslo",
+            evidence_span="TOTAL FABRICATION AND APPEARS NOWHERE",
+        )
+    assert "SPAN_NOT_IN_SOURCE" in str(exc_info.value)
 
 
 def test_recall_tool_abstains_with_no_facts_at_all(runtime):

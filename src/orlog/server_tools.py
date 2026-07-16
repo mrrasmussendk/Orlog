@@ -67,21 +67,25 @@ def _empty_abstention(as_of: datetime, reason: str) -> dict:
 def remember_tool(
     runtime: Runtime, text: str, *, occurred_at: str | None = None, type: str = "fact",
     actor: str = "user", entity: str | None = None, attribute: str | None = None, value: str | None = None,
-    entity_detail: str | None = None, register_new_type: bool = False, register_new_attribute: bool = False,
+    entity_detail: str | None = None, evidence_span: str | None = None,
+    register_new_type: bool = False, register_new_attribute: bool = False,
 ) -> dict:
     """spec §B9: {text, occurred_at?, type?="fact", actor?="user", entity,
-    attribute, value, entity_detail?, register_new_type?, register_new_attribute?}
-    -> {event_id}. entity/attribute/value are REQUIRED together -- a
-    text-only memory is not retrievable via recall()/recall_history() in
-    this reference server, so Runtime.remember() rejects it outright.
-    Raises orlog.errors.SchemaError (E_SCHEMA) if that requirement, schema-
-    on-write, or the entity_detail-required-on-collision rule rejects the
-    write -- see Runtime.remember()'s own docstring/helpers for the rules.
+    attribute, value, entity_detail?, evidence_span?, register_new_type?,
+    register_new_attribute?} -> {event_id}. entity/attribute/value are
+    REQUIRED together -- a text-only memory is not retrievable via
+    recall()/recall_history() in this reference server, so
+    Runtime.remember() rejects it outright. Raises orlog.errors.SchemaError
+    (E_SCHEMA) if that requirement, schema-on-write, the
+    entity_detail-required-on-collision rule, or an evidence_span that
+    doesn't appear in text rejects the write -- see Runtime.remember()'s
+    own docstring/helpers for the rules.
     """
     occurred = _parse_datetime(occurred_at) if occurred_at else datetime.now(timezone.utc)
     event = runtime.remember(
         text, occurred_at=occurred, event_type=type, actor=actor,
         entity=entity, attribute=attribute, value=value, entity_detail=entity_detail,
+        evidence_span=evidence_span,
         register_new_type=register_new_type, register_new_attribute=register_new_attribute,
     )
     return {"event_id": event.id}

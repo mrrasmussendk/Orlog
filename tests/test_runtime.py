@@ -141,6 +141,38 @@ def test_remember_flags_a_consistent_fact_as_self_supported(runtime):
     assert event.payload["self_supported"] is True
 
 
+def test_remember_accepts_a_paraphrased_value_grounded_by_a_real_evidence_span(runtime):
+    # value doesn't appear verbatim in text at all -- only evidence_span does.
+    event = runtime.remember(
+        "Marc adores the city of Porto lately.", occurred_at=T1,
+        entity="marc", attribute="likes", value="loves Porto",
+        evidence_span="adores the city of Porto",
+    )
+
+    assert event.payload["self_supported"] is True
+    assert event.payload["evidence_span"] == "adores the city of Porto"
+
+
+def test_remember_rejects_a_fabricated_evidence_span_at_write_time(runtime):
+    with pytest.raises(SchemaError) as exc_info:
+        runtime.remember(
+            "Kim lives in Oslo", occurred_at=T1,
+            entity="kim", attribute="city", value="Oslo",
+            evidence_span="TOTAL FABRICATION AND APPEARS NOWHERE",
+        )
+    assert "SPAN_NOT_IN_SOURCE" in str(exc_info.value)
+
+
+def test_remember_evidence_span_tolerates_whitespace_differences(runtime):
+    event = runtime.remember(
+        "Kim   lives\nin Oslo", occurred_at=T1,
+        entity="kim", attribute="city", value="Oslo",
+        evidence_span="Kim lives in Oslo",
+    )
+
+    assert event.payload["self_supported"] is True
+
+
 def test_entity_detail_composes_a_distinct_chain_key(runtime):
     event = runtime.remember(
         "anna (coworker) moved to seattle", occurred_at=T1,

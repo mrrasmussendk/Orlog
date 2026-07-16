@@ -40,7 +40,8 @@ def build_server(runtime: Runtime) -> FastMCP:
     def remember(
         text: str, occurred_at: str | None = None, type: str = "fact", actor: str = "user",
         entity: str | None = None, attribute: str | None = None, value: str | None = None,
-        entity_detail: str | None = None, register_new_type: bool = False, register_new_attribute: bool = False,
+        entity_detail: str | None = None, evidence_span: str | None = None,
+        register_new_type: bool = False, register_new_attribute: bool = False,
     ) -> dict:
         """Append a scrubbed memory to the log. Returns {event_id}.
 
@@ -74,17 +75,27 @@ def build_server(runtime: Runtime) -> FastMCP:
         a later free-text recall() can end up answering from whichever of
         the two ranks higher, not necessarily the newer one.
 
-        `value` MUST appear verbatim (or as a close substring) inside
-        `text` -- e.g. text="Marc doesn't eat gluten.", value="gluten", NOT
-        value="gluten-free" (a paraphrase that never literally appears in
-        `text`). This reference server checks each fact's own remembered
-        text against its value at write time; a value that can't be found
-        in the text is marked unverifiable, and every future recall() for
-        it abstains with UNSUPPORTED_BY_SOURCE, permanently. This is not a
-        bug to work around later -- a paraphrased or normalized value
-        silently and irreversibly breaks retrieval for that fact. When in
-        doubt, quote the source text's own wording for `value` rather than
-        summarizing it.
+        `evidence_span` should be the literal quote from `text` that
+        grounds `value` -- e.g. text="Marc adores the city of Porto lately.",
+        value="loves Porto", evidence_span="adores the city of Porto".
+        Unlike `value`, evidence_span MUST appear verbatim (whitespace
+        differences are fine) inside `text`; a span that can't be found
+        there is rejected immediately with an E_SCHEMA error
+        (SPAN_NOT_IN_SOURCE) -- the write never happens, rather than
+        silently logging a fact that would abstain with
+        UNSUPPORTED_BY_SOURCE on every future recall(). Passing
+        evidence_span means `value` itself is free to be a clean,
+        normalized extraction rather than a verbatim substring of `text`.
+
+        evidence_span is optional for backward compatibility: omitting it
+        falls back to this reference server's legacy check, which instead
+        requires `value` itself to appear verbatim (or as a close
+        substring) inside `text` -- e.g. text="Marc doesn't eat gluten.",
+        value="gluten", NOT value="gluten-free" (a paraphrase that never
+        literally appears in `text`). A value that can't be found in the
+        text this way is marked unverifiable, and every future recall() for
+        it abstains with UNSUPPORTED_BY_SOURCE, permanently. Prefer passing
+        evidence_span over relying on this fallback.
 
         `entity_detail` disambiguates two entities that would otherwise
         share a bare name (e.g. two different people both named "Anna"):
@@ -111,6 +122,7 @@ def build_server(runtime: Runtime) -> FastMCP:
         return remember_tool(
             runtime, text, occurred_at=occurred_at, type=type, actor=actor,
             entity=entity, attribute=attribute, value=value, entity_detail=entity_detail,
+            evidence_span=evidence_span,
             register_new_type=register_new_type, register_new_attribute=register_new_attribute,
         )
 

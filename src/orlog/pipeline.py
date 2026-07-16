@@ -368,7 +368,7 @@ class Pipeline:
             citations.append(
                 AnswerCitation(
                     event_id=event_id,
-                    excerpt=fact.value,
+                    excerpt=fact.evidence_span if fact.evidence_span is not None else fact.value,
                     valid_from=fact.valid_from,
                     valid_to=None if fact.valid_to == OPEN_VALID_TO else fact.valid_to,
                 )

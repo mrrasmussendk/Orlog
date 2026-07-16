@@ -99,6 +99,14 @@ def _build_deriver(config: OrlogConfig):
     raise ValueError(f"unknown deriver backend {config.deriver.backend!r}")
 
 
+def normalize_ws(s: str) -> str:
+    """Collapse all whitespace runs to single spaces and strip the ends, so
+    an evidence_span that differs from its source text only in incidental
+    formatting (a line break, doubled spaces) isn't rejected as ungrounded.
+    """
+    return " ".join(s.split())
+
+
 def _build_embedder(config: OrlogConfig):
     """"hashing" selects the dependency-free HashingEmbedder (an explicit,
     offline opt-out); anything else -- including this project's own default,
@@ -180,6 +188,7 @@ class Runtime:
         attribute: str | None = None,
         value: str | None = None,
         entity_detail: str | None = None,
+        evidence_span: str | None = None,
         register_new_type: bool = False,
         register_new_attribute: bool = False,
     ):
@@ -213,6 +222,23 @@ class Runtime:
         # lookup keys, not prose, and stay as given -- scrubbing them
         # would break exact-match recall("entity.attribute") queries.
         scrubbed_value = scrub(value, self.vault, detectors=self.config.privacy.detectors)
+        # `evidence_span` is the caller's literal quote from `text` that
+        # grounds `value` -- a SEPARATE string from `value` itself, so
+        # `value` is free to be a clean/normalized/paraphrased extraction
+        # (e.g. value="loves Porto" from text "...adores the city of
+        # Porto...") without that paraphrase itself having to appear
+        # verbatim in text. It goes through the same scrub() pass as text
+        # for the same reason value does (vault.tokenize is stable per
+        # input, so a PII span scrubbed independently here still matches
+        # the identically-tokenized occurrence inside scrubbed_text).
+        # Ungrounded per spec: fail visible, at write time, not a fact that
+        # silently poisons every future recall() with UNSUPPORTED_BY_SOURCE.
+        scrubbed_span = scrub(evidence_span, self.vault, detectors=self.config.privacy.detectors) if evidence_span is not None else None
+        if scrubbed_span is not None and normalize_ws(scrubbed_span) not in normalize_ws(scrubbed_text):
+            raise SchemaError(
+                f"SPAN_NOT_IN_SOURCE: evidence_span {evidence_span!r} does not appear in text {text!r} -- "
+                "quote the source text verbatim (whitespace differences are ok), don't paraphrase or fabricate it."
+            )
         # `entity_detail` disambiguates two entities that share a bare
         # name (the "which Anna" problem) -- it becomes PART OF the
         # chain-grouping key itself (verdandi/heimdall need no changes,
@@ -225,14 +251,22 @@ class Runtime:
         payload.update(entity=stored_entity, attribute=attribute, value=scrubbed_value)
         # Write-time self-consistency check (heimdall.GroundTruthFact.self_supported):
         # does this fact's own remembered text actually support the value
-        # it's being recorded with? Checked once, here, on both post-scrub
-        # strings (so a value that happens to be PII still matches the
-        # identically-tokenized span in text) -- never re-derived on
-        # every read. A caller-contradicted fact (e.g. text says "Paris",
-        # value says "Tokyo") is then a fast, permanent, correctly-labeled
-        # verification failure for every future reader instead of a fresh
-        # derive+verify round trip (and its failure mode) on every recall().
-        payload["self_supported"] = scrubbed_value in scrubbed_text
+        # it's being recorded with? When the caller supplies evidence_span,
+        # that's already been validated above (a bad span raised
+        # SchemaError instead of ever reaching here), so self_supported is
+        # simply True and the span itself -- not `value` -- is what a
+        # citation excerpt is built from (see pipeline._citations_from).
+        # Without evidence_span, this falls back to the legacy check (value
+        # itself must appear verbatim in text) for callers that haven't
+        # migrated yet. A caller-contradicted legacy fact (e.g. text says
+        # "Paris", value says "Tokyo") is then a fast, permanent,
+        # correctly-labeled verification failure for every future reader
+        # instead of a fresh derive+verify round trip on every recall().
+        if scrubbed_span is not None:
+            payload["evidence_span"] = scrubbed_span
+            payload["self_supported"] = True
+        else:
+            payload["self_supported"] = scrubbed_value in scrubbed_text
         if entity_detail:
             payload["entity_label"] = entity
             payload["entity_detail"] = entity_detail

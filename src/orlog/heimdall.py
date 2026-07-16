@@ -61,6 +61,12 @@ class GroundTruthFact(BaseModel):
     # event that predates this field or was never given free text, so this
     # stays backward compatible rather than treating "unknown" as "poisoned".
     self_supported: bool = True
+    # Runtime.remember()'s caller-supplied literal quote from the fact's own
+    # `text` that grounds `value` (validated against text at write time --
+    # see runtime.py). None for any event that predates this field or was
+    # never given one, in which case a citation excerpt falls back to
+    # `value` (see pipeline._citations_from).
+    evidence_span: str | None = None
 
     @property
     def key(self) -> str:
@@ -95,6 +101,7 @@ def build_ground_truth(events: Sequence[Event]) -> dict[str, GroundTruthFact]:
                 valid_from=event.occurred_at,
                 valid_to=valid_to,
                 self_supported=event.payload.get("self_supported", True),
+                evidence_span=event.payload.get("evidence_span"),
             )
     return truth
 
