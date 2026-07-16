@@ -53,6 +53,16 @@ def build_server(runtime: Runtime) -> FastMCP:
         unretrievable via recall()/recall_history() in this reference
         server, which is a silent dead end this tool refuses to create.
 
+        For a yes/no or relational fact (e.g. "is allergic to X", "likes
+        Y"), keep `attribute` as the general, reusable category and put the
+        specific detail in `value` -- e.g. attribute="allergy",
+        value="shellfish", NOT attribute="shellfish_allergy", value="true".
+        Folding the specific detail into the attribute name is still a
+        valid write, but makes the fact effectively unqueryable later:
+        nobody asking recall("emma.allergy"), or a free-text "what is Emma
+        allergic to?", can guess an attribute name that already contains
+        the answer.
+
         `entity_detail` disambiguates two entities that would otherwise
         share a bare name (e.g. two different people both named "Anna"):
         pass a short distinguishing phrase (e.g. "coworker at Acme") and the
