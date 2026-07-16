@@ -33,6 +33,7 @@ from orlog.verdandi import build_supersession_chains
 
 T1 = datetime(2026, 1, 1, tzinfo=timezone.utc)
 T2 = datetime(2026, 6, 1, tzinfo=timezone.utc)
+T_BETWEEN = datetime(2026, 3, 1, tzinfo=timezone.utc)
 
 
 def _build_pipeline(log, cache):
@@ -102,3 +103,38 @@ def test_truth_refresh_prevents_a_stale_answer_from_ever_being_served(make_log, 
     r2_again = pipeline.answer("q2b", "user:2", "status", T2, now=T2)
     assert r2_again.verified is True
     assert r2_again.claim == "user:2.status = active"
+
+
+def test_a_verification_failure_evicts_only_its_own_key_not_a_neighbors(make_log, make_event):
+    # Distinct from the truth_version-rotation test above: this isolates
+    # the OTHER invalidation path pipeline.answer() has (a cached
+    # assertion that fails re-verification gets evicted on its own,
+    # spec §B6) by rebuilding the verifier from new events while
+    # deliberately keeping truth_version as the SAME literal string --
+    # proving reuse is genuinely per-key, not merely "whatever wasn't
+    # touched by the last truth_version bump."
+    log = make_log()
+    log.append(make_event(occurred_at=T1, payload={"entity": "user:1", "attribute": "status", "value": "active"}))
+    log.append(make_event(occurred_at=T1, payload={"entity": "user:2", "attribute": "status", "value": "active"}))
+
+    cache = RouteCache()
+    pipeline = _build_pipeline(log, cache)
+
+    r1 = pipeline.answer("q1", "user:1", "status", T2, now=T1)
+    r2 = pipeline.answer("q2", "user:2", "status", T2, now=T1)
+    assert r1.route == "fresh" and r2.route == "fresh"
+
+    log.append(make_event(occurred_at=T_BETWEEN, payload={"entity": "user:1", "attribute": "status", "value": "inactive"}))
+    events = log.read_all()
+    view, pv = build_supersession_chains(events, builder="test", built_at=T1)
+    pipeline.view = view
+    pipeline.projection_version = pv
+    pipeline.events_by_id = {e.id: e for e in events}
+    pipeline.verifier = Heimdall(build_ground_truth(events), truth_version="v-initial")
+
+    r1b = pipeline.answer("q1b", "user:1", "status", T2, now=T2)
+    r2b = pipeline.answer("q2b", "user:2", "status", T2, now=T2)
+
+    assert r1b.verified is True and r1b.claim == "user:1.status = inactive"  # re-derived, not stale
+    assert r2b.route == "cache"  # untouched neighbor: still served straight from cache
+    assert r2b.claim == "user:2.status = active"
