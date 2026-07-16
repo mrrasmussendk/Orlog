@@ -117,3 +117,55 @@ def test_no_candidates_raises_uncited_assertion_without_calling_the_model():
         deriver.derive("user:1.plan", NOW, [], query_id="q1", derived_at=NOW, route="fresh")
 
     assert completion.calls == 0
+
+
+def test_duplicate_citation_ids_are_kept_as_is_not_deduplicated():
+    completion = _QueuedCompletion(('{"claim": "user:1.plan = pro", "citations": ["ev-1", "ev-1"]}', {"in": 5, "out": 5}))
+    deriver = LLMDeriver(completion, model="test-model")
+
+    assertion = deriver.derive("user:1.plan", NOW, [_candidate()], query_id="q1", derived_at=NOW, route="fresh")
+
+    assert assertion.citations == ["ev-1", "ev-1"]
+
+
+def test_a_citations_field_that_is_a_bare_string_not_a_list_yields_no_valid_citations():
+    # `parsed.get("citations") or []` keeps a truthy string as-is; iterating
+    # a string yields its individual characters, none of which match a real
+    # event id -- so this fails safely into UncitedAssertion rather than
+    # silently misbehaving. Pinned down explicitly since it's a subtle
+    # consequence of Python's string iteration, not an intentional check.
+    completion = _QueuedCompletion(('{"claim": "user:1.plan = pro", "citations": "ev-1"}', {"in": 5, "out": 5}))
+    deriver = LLMDeriver(completion, model="test-model")
+
+    with pytest.raises(UncitedAssertion):
+        deriver.derive("user:1.plan", NOW, [_candidate()], query_id="q1", derived_at=NOW, route="fresh")
+
+
+def test_empty_string_claim_is_treated_the_same_as_a_missing_claim():
+    completion = _QueuedCompletion(('{"claim": "", "citations": ["ev-1"]}', {"in": 5, "out": 5}))
+    deriver = LLMDeriver(completion, model="test-model")
+
+    with pytest.raises(UncitedAssertion):
+        deriver.derive("user:1.plan", NOW, [_candidate()], query_id="q1", derived_at=NOW, route="fresh")
+
+
+def test_a_brace_inside_a_quoted_string_value_does_not_break_extraction():
+    text = 'Here is my answer: {"claim": "the value is {nested}", "citations": ["ev-1"]} - hope that helps!'
+    completion = _QueuedCompletion((text, {"in": 5, "out": 5}))
+    deriver = LLMDeriver(completion, model="test-model")
+
+    assertion = deriver.derive("user:1.plan", NOW, [_candidate()], query_id="q1", derived_at=NOW, route="fresh")
+
+    assert assertion.claim == "the value is {nested}"
+    assert assertion.citations == ["ev-1"]
+
+
+def test_json_wrapped_in_a_markdown_code_fence_extracts_on_the_first_try():
+    fenced = '```json\n{"claim": "user:1.plan = pro", "citations": ["ev-1"]}\n```'
+    completion = _QueuedCompletion((fenced, {"in": 5, "out": 5}))
+    deriver = LLMDeriver(completion, model="test-model")
+
+    assertion = deriver.derive("user:1.plan", NOW, [_candidate()], query_id="q1", derived_at=NOW, route="fresh")
+
+    assert assertion.claim == "user:1.plan = pro"
+    assert completion.calls == 1  # no repair retry needed
