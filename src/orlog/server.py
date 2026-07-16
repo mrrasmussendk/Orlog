@@ -63,6 +63,18 @@ def build_server(runtime: Runtime) -> FastMCP:
         allergic to?", can guess an attribute name that already contains
         the answer.
 
+        `value` MUST appear verbatim (or as a close substring) inside
+        `text` -- e.g. text="Marc doesn't eat gluten.", value="gluten", NOT
+        value="gluten-free" (a paraphrase that never literally appears in
+        `text`). This reference server checks each fact's own remembered
+        text against its value at write time; a value that can't be found
+        in the text is marked unverifiable, and every future recall() for
+        it abstains with UNSUPPORTED_BY_SOURCE, permanently. This is not a
+        bug to work around later -- a paraphrased or normalized value
+        silently and irreversibly breaks retrieval for that fact. When in
+        doubt, quote the source text's own wording for `value` rather than
+        summarizing it.
+
         `entity_detail` disambiguates two entities that would otherwise
         share a bare name (e.g. two different people both named "Anna"):
         pass a short distinguishing phrase (e.g. "coworker at Acme") and the
