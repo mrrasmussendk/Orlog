@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
+from orlog.storage import SegmentedLog
+from orlog.models.event import EventDraft
 from orlog.verdandi import build_supersession_chains
 
 T1 = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -75,3 +77,24 @@ def test_rebuilding_after_reading_the_log_a_second_time_is_still_identical(make_
 
     assert view_a.model_dump_json() == view_b.model_dump_json()
     assert pv_a.model_dump_json() == pv_b.model_dump_json()
+
+
+def test_replay_is_still_byte_identical_across_a_segment_rotation_boundary(tmp_path):
+    # Every other C5 test in this file uses a single-segment EventLog (via
+    # make_log). This proves replay determinism survives an ACTUAL
+    # multi-segment log -- rotate_bytes=200 matches the convention already
+    # used in tests/test_storage.py to force rotation without writing 64MB.
+    clock = lambda: BUILT_AT  # noqa: E731
+    log = SegmentedLog(tmp_path / "events", clock=clock, rotate_bytes=200)
+    log.append(EventDraft(occurred_at=T1, actor="test", type="fact", payload={"entity": "user:1", "attribute": "plan", "value": "free", "padding": "x" * 80}))
+    log.append(EventDraft(occurred_at=T2, actor="test", type="fact", payload={"entity": "user:1", "attribute": "plan", "value": "pro", "padding": "x" * 80}))
+
+    segments = sorted((tmp_path / "events").glob("log-*.jsonl"))
+    assert len(segments) > 1  # rotation actually happened
+    assert log.verify_chain(full=True) is True
+
+    view_a, pv_a = build_supersession_chains(log.read_all(), builder="test", built_at=BUILT_AT, version=1)
+    view_b, pv_b = build_supersession_chains(log.read_all(), builder="test", built_at=BUILT_AT, version=1)
+
+    assert view_a.model_dump_json() == view_b.model_dump_json()
+    assert pv_b.model_dump_json() == pv_b.model_dump_json()
