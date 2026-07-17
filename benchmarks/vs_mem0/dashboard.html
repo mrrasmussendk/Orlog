@@ -1,0 +1,823 @@
+<title>orlog vs Mem0 — Benchmark Dashboard</title>
+<style>
+  /* ---------- palette (dataviz skill reference palette, 2 categorical slots) ---------- */
+  .viz-root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-orlog:   #2a78d6; /* categorical slot 1 */
+    --series-mem0:    #008300; /* categorical slot 2 */
+    --success-text:   #006300;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-orlog:   #3987e5;
+      --series-mem0:    #008300;
+      --success-text:   #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-orlog:   #3987e5;
+    --series-mem0:    #008300;
+    --success-text:   #0ca30c;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--page-plane);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .viz-root { background: var(--page-plane); min-height: 100%; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 40px 24px 64px; }
+
+  header.page-header h1 { font-size: 28px; font-weight: 700; margin: 0 0 8px; letter-spacing: -0.01em; }
+  header.page-header .subtitle { font-size: 16px; color: var(--text-secondary); margin: 0 0 4px; max-width: 68ch; line-height: 1.5; }
+  header.page-header .provenance { font-size: 12.5px; color: var(--text-muted); margin: 14px 0 0; }
+  header.page-header .provenance code { font-family: inherit; background: var(--surface-1); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+
+  .legend-global { display: flex; gap: 18px; margin: 18px 0 0; font-size: 13px; color: var(--text-secondary); }
+  .legend-item { display: inline-flex; align-items: center; gap: 6px; }
+  .legend-item i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+  section { margin-top: 40px; }
+  section > h2 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin: 0 0 14px; }
+
+  /* ---------- callouts ---------- */
+  .callout-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .callout {
+    position: relative; overflow: hidden;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px 16px 21px;
+  }
+  .callout::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--text-muted);
+  }
+  .callout.accent-orlog::before { background: var(--series-orlog); }
+  .callout.accent-mem0::before { background: var(--series-mem0); }
+  .callout.accent-split::before {
+    background: linear-gradient(to bottom, var(--series-orlog) 0%, var(--series-orlog) 50%, var(--series-mem0) 50%, var(--series-mem0) 100%);
+  }
+  .callout .eyebrow { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin: 0 0 6px; }
+  .callout .headline { font-size: 15.5px; font-weight: 600; margin: 0 0 6px; line-height: 1.35; }
+  .callout .body { font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin: 0; }
+
+  /* ---------- chart cards ---------- */
+  .chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 20px; }
+  .chart-card {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px 22px 18px;
+  }
+  .chart-card.full { grid-column: 1 / -1; }
+  .chart-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 4px; flex-wrap: wrap; }
+  .chart-title { font-size: 15px; font-weight: 700; margin: 0; }
+  .chart-subtitle { font-size: 12.5px; color: var(--text-secondary); margin: 3px 0 0; }
+  .chart-legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+  .chart-legend .legend-item i { width: 9px; height: 9px; }
+
+  .chart-body-wrap { margin-top: 10px; overflow-x: auto; }
+  svg.chart-svg { display: block; width: 100%; height: auto; }
+  .gridline { stroke: var(--gridline); stroke-width: 1; }
+  .baseline-rule { stroke: var(--baseline); stroke-width: 1; }
+  .axis-tick { font-size: 11px; fill: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .axis-cat { font-size: 12px; fill: var(--text-secondary); }
+  .bar-value { font-size: 11.5px; fill: var(--text-primary); font-weight: 600; }
+  .bar-value.zero { fill: var(--text-muted); font-weight: 600; }
+  .bar { transition: filter 0.1s ease; }
+  .hit { cursor: pointer; }
+  .hit:hover + .bar-value,
+  .bar-g:has(.hit:hover) .bar,
+  .bar-g:has(.hit:focus-visible) .bar { filter: brightness(1.12); }
+  .bar-g:has(.hit:focus-visible) .hit { outline: 2px solid var(--text-primary); outline-offset: 1px; }
+  .zero-marker { stroke: var(--surface-1); stroke-width: 1.5; }
+
+  .chart-caption { font-size: 12px; color: var(--text-muted); margin: 10px 0 0; line-height: 1.5; }
+
+  .table-toggle {
+    font-size: 12px; font-weight: 600; color: var(--text-secondary);
+    background: transparent; border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 10px; cursor: pointer; white-space: nowrap;
+  }
+  .table-toggle:hover { background: var(--page-plane); }
+  .table-wrap { margin-top: 12px; overflow-x: auto; }
+  table.data-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.data-table th, table.data-table td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--gridline); font-variant-numeric: tabular-nums; }
+  table.data-table th[scope="row"], table.data-table th[scope="col"]:first-child { text-align: left; font-variant-numeric: normal; }
+  table.data-table thead th { color: var(--text-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; border-bottom: 1px solid var(--baseline); }
+  table.data-table tbody th { font-weight: 600; color: var(--text-primary); }
+
+  [hidden] { display: none !important; }
+
+  /* ---------- token section (stat tile + empty state) ---------- */
+  .token-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-top: 10px; }
+  .stat-tile { border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; background: var(--page-plane); }
+  .stat-tile .stat-label { font-size: 12px; color: var(--text-secondary); margin: 0 0 8px; display: flex; align-items: center; gap: 7px; }
+  .stat-tile .stat-label i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; background: var(--series-orlog); }
+  .stat-tile .stat-value { font-size: 34px; font-weight: 700; line-height: 1.1; margin: 0; }
+  .stat-tile .stat-value .unit { font-size: 16px; font-weight: 600; color: var(--text-secondary); margin-left: 4px; }
+  .stat-tile .stat-sub { font-size: 12.5px; color: var(--text-muted); margin: 8px 0 0; }
+
+  .empty-state { border: 1px dashed var(--border); border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; justify-content: center; min-height: 100%; }
+  .empty-state .stat-label { font-size: 12px; color: var(--text-secondary); margin: 0 0 8px; display: flex; align-items: center; gap: 7px; }
+  .empty-state .stat-label i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; background: var(--series-mem0); opacity: 0.35; }
+  .empty-state .empty-value { font-size: 20px; font-weight: 700; color: var(--text-muted); margin: 0; }
+  .empty-state .empty-detail { font-size: 12.5px; color: var(--text-muted); margin: 8px 0 0; line-height: 1.5; }
+
+  /* ---------- methodology ---------- */
+  .methodology { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 22px 24px; }
+  .methodology h3 { font-size: 13.5px; margin: 0 0 8px; }
+  .methodology p, .methodology li { font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+  .methodology ul { margin: 6px 0 16px; padding-left: 20px; }
+  .methodology ul:last-child { margin-bottom: 0; }
+  .methodology code { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 12px; background: var(--page-plane); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+  .methodology .bugs-note { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+
+  footer.page-footer { margin-top: 40px; font-size: 12px; color: var(--text-muted); line-height: 1.6; }
+  footer.page-footer code { font-family: ui-monospace, "SF Mono", Consolas, monospace; background: var(--surface-1); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+
+  /* ---------- tooltip ---------- */
+  #tooltip {
+    position: fixed; pointer-events: none; z-index: 1000;
+    background: #0b0b0b; color: #ffffff; border-radius: 6px; padding: 7px 10px;
+    font-size: 12px; line-height: 1.4; max-width: 220px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+    transform: translate(-50%, -100%);
+  }
+  #tooltip .tt-series { display: flex; align-items: center; gap: 6px; color: #d8d8d5; font-weight: 500; }
+  #tooltip .tt-series i { width: 8px; height: 2px; display: inline-block; }
+  #tooltip .tt-value { font-weight: 700; color: #ffffff; }
+</style>
+
+<div class="viz-root">
+  <div class="wrap">
+    <header class="page-header">
+      <h1>orlog vs Mem0 — benchmark dashboard</h1>
+      <p class="subtitle">
+        A same-inputs, real-API benchmark of orlog against
+        <a href="https://github.com/mem0ai/mem0" style="color:inherit">Mem0</a> on
+        speed, accuracy, and abstention behavior. The headline accuracy numbers
+        are nearly tied — that hides the real story, which is below.
+      </p>
+      <p class="provenance">
+        Snapshot committed <code>2026-07-17</code> from
+        <code>benchmarks/vs_mem0/results.json</code>. Numbers drift slightly
+        between runs (real LLM calls); this is one committed run, not a
+        reproducibility guarantee. Full methodology in
+        <code>benchmarks/vs_mem0/README.md</code>.
+      </p>
+      <div class="legend-global">
+        <span class="legend-item"><i style="background:var(--series-orlog)"></i>orlog</span>
+        <span class="legend-item"><i style="background:var(--series-mem0)"></i>Mem0</span>
+      </div>
+    </header>
+
+    <section aria-label="Key findings">
+      <h2>The nuance the headline number hides</h2>
+      <div class="callout-grid">
+        <div class="callout">
+          <p class="eyebrow">Overall accuracy</p>
+          <p class="headline">72.5% (orlog) vs 75.0% (Mem0) — near tie</p>
+          <p class="body">A single blended score across 40 questions makes the
+            two systems look almost identical. They get there in very
+            different ways — see the next three cards.</p>
+        </div>
+        <div class="callout accent-split">
+          <p class="eyebrow">Post-update accuracy</p>
+          <p class="headline">orlog 90% vs Mem0 0%</p>
+          <p class="body">On the 10 questions about facts that were later
+            updated, Mem0 answered every single one with the stale
+            pre-update value in this benchmark's shared-bucket configuration
+            — verified as a real behavior, not a grading bug. orlog got 9 of 10 right.</p>
+        </div>
+        <div class="callout accent-orlog">
+          <p class="eyebrow">Abstention on unanswerable questions</p>
+          <p class="headline">orlog 46.7% vs Mem0 0%</p>
+          <p class="body">orlog correctly says "I don't know" on close to half
+            of genuinely unanswerable questions. Mem0 has no abstain concept —
+            it always hands back its nearest-scoring memory, right or wrong,
+            so it is never correct here.</p>
+        </div>
+        <div class="callout">
+          <p class="eyebrow">Speed cuts both ways</p>
+          <p class="headline">Mem0 reads ~8x faster · orlog writes ~55x faster</p>
+          <p class="body">Query p50: 203&nbsp;ms (Mem0) vs 1,712&nbsp;ms (orlog).
+            Ingest p50: 31&nbsp;ms (orlog) vs 1,680&nbsp;ms (Mem0). Each
+            system is faster at the opposite half of the workload.</p>
+        </div>
+      </div>
+    </section>
+
+    <section aria-label="Charts">
+      <h2>The numbers</h2>
+      <div class="chart-grid">
+
+        <!-- Ingest latency -->
+        <div class="chart-card">
+          <div class="chart-card-head">
+            <div>
+              <p class="chart-title">Ingest latency</p>
+              <p class="chart-subtitle">mean / p50 / p95, milliseconds, lower is faster (n=50 per system)</p>
+            </div>
+            <div class="chart-legend">
+              <span class="legend-item"><i style="background:var(--series-orlog)"></i>orlog</span>
+              <span class="legend-item"><i style="background:var(--series-mem0)"></i>Mem0</span>
+            </div>
+          </div>
+          <div class="chart-body-wrap" id="chart-ingest"></div>
+          <p class="chart-caption">orlog's bars are real, not missing — they are
+            just tiny next to Mem0's. Mem0's extraction+update-decision LLM
+            call on every <code>add()</code> makes ingest its slow path,
+            mirroring orlog's query-time LLM call making reads its slow path.</p>
+          <button class="table-toggle" data-target="ingest" aria-pressed="false">View as table</button>
+          <div class="table-wrap" id="table-ingest" hidden></div>
+        </div>
+
+        <!-- Query latency -->
+        <div class="chart-card">
+          <div class="chart-card-head">
+            <div>
+              <p class="chart-title">Query latency</p>
+              <p class="chart-subtitle">p50, known vs. unknown-fact questions, milliseconds</p>
+            </div>
+            <div class="chart-legend">
+              <span class="legend-item"><i style="background:var(--series-orlog)"></i>orlog</span>
+              <span class="legend-item"><i style="background:var(--series-mem0)"></i>Mem0</span>
+            </div>
+          </div>
+          <div class="chart-body-wrap" id="chart-query"></div>
+          <p class="chart-caption">orlog's read path runs a derivation LLM call
+            and a verification (heimdall) pass per query; Mem0's read is a
+            vector-similarity lookup with no verification step — the
+            architectural source of the ~8x gap.</p>
+          <button class="table-toggle" data-target="query" aria-pressed="false">View as table</button>
+          <div class="table-wrap" id="table-query" hidden></div>
+        </div>
+
+        <!-- Accuracy -->
+        <div class="chart-card">
+          <div class="chart-card-head">
+            <div>
+              <p class="chart-title">Accuracy: overall vs. post-update</p>
+              <p class="chart-subtitle">share of questions answered correctly</p>
+            </div>
+            <div class="chart-legend">
+              <span class="legend-item"><i style="background:var(--series-orlog)"></i>orlog</span>
+              <span class="legend-item"><i style="background:var(--series-mem0)"></i>Mem0</span>
+            </div>
+          </div>
+          <div class="chart-body-wrap" id="chart-accuracy"></div>
+          <p class="chart-caption">The overall bars (n=40) look close. The
+            post-update bars (n=10 — a small slice, worth reading with that
+            in mind) show what the overall score hides: Mem0's stored memory
+            never reflected the update in this benchmark's shared-bucket
+            setup.</p>
+          <button class="table-toggle" data-target="accuracy" aria-pressed="false">View as table</button>
+          <div class="table-wrap" id="table-accuracy" hidden></div>
+        </div>
+
+        <!-- Abstention -->
+        <div class="chart-card">
+          <div class="chart-card-head">
+            <div>
+              <p class="chart-title">Correct abstention on unanswerable questions</p>
+              <p class="chart-subtitle">15 questions per system about attributes never stored for that entity</p>
+            </div>
+            <div class="chart-legend">
+              <span class="legend-item"><i style="background:var(--series-orlog)"></i>orlog</span>
+              <span class="legend-item"><i style="background:var(--series-mem0)"></i>Mem0</span>
+            </div>
+          </div>
+          <div class="chart-body-wrap" id="chart-abstention"></div>
+          <p class="chart-caption">False-positive rate is the mirror of this
+            bar (100% − correct-abstention-rate): 53.3% for orlog, 100% for
+            Mem0. Mem0 has no built-in verified/abstained concept, so it is
+            structurally unable to score here — this metric exists to make
+            that gap visible, not to penalize a feature Mem0 never claimed to have.</p>
+          <button class="table-toggle" data-target="abstention" aria-pressed="false">View as table</button>
+          <div class="table-wrap" id="table-abstention" hidden></div>
+        </div>
+
+        <!-- Tokens -->
+        <div class="chart-card full">
+          <div class="chart-card-head">
+            <div>
+              <p class="chart-title">Token usage per graded call</p>
+              <p class="chart-subtitle">orlog only — see note</p>
+            </div>
+          </div>
+          <div class="token-grid">
+            <div class="stat-tile">
+              <p class="stat-label"><i></i>orlog</p>
+              <p class="stat-value">189.5<span class="unit">tokens / call</span></p>
+              <p class="stat-sub">10,423 tokens total across 55 graded calls (ingest + query)</p>
+            </div>
+            <div class="empty-state">
+              <p class="stat-label"><i></i>Mem0</p>
+              <p class="empty-value">Not reported</p>
+              <p class="empty-detail">Mem0's Python client does not surface
+                token counts from <code>add()</code>/<code>search()</code> in
+                this benchmark, so there is no comparable figure — this is
+                omitted data, not a measured zero.</p>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <section aria-label="Methodology" class="methodology-section">
+      <h2>Methodology</h2>
+      <div class="methodology">
+        <h3>What was run</h3>
+        <p>Both systems ingest the same 40 natural-language facts about 10
+          synthetic entities (plus 10 follow-up facts that update earlier
+          ones), then answer the same 55 questions (40 about known facts, 15
+          about attributes never stored for that entity). Grading is a
+          deterministic, case-insensitive substring match — not an LLM judge.
+          All entities share one orlog event log and one Mem0 user bucket;
+          neither system is told which entity a question is about.</p>
+
+        <h3>Metrics shown here</h3>
+        <ul>
+          <li><strong>Ingest / query latency</strong> — wall-clock per call, from 50 ingests and 55 queries (40 known + 15 unknown) per system.</li>
+          <li><strong>Accuracy</strong> — overall (all 40 known-fact questions) and post-update-only (the 10 whose answer changed after a later update).</li>
+          <li><strong>Abstention</strong> — on the 15 unknown-fact questions, orlog counts <code>NO_CANDIDATES</code>/other abstention as correct; Mem0 counts "nothing cleared its default similarity threshold" as correct.</li>
+          <li><strong>Tokens</strong> — orlog's LLM call token counts; Mem0's client does not expose these, so it is shown as unavailable rather than zero.</li>
+        </ul>
+
+        <h3>Models</h3>
+        <p>orlog runs on Anthropic's <code>claude-haiku-4-5</code> (its own
+          calibrated default); Mem0 runs on OpenAI's <code>gpt-4o-mini</code>.
+          This ended up cross-provider rather than same-model — see the note below.</p>
+
+        <div class="bugs-note">
+          <h3>Model note: two real orlog bugs found and fixed while building this</h3>
+          <p>The original plan ran both systems on the same OpenAI model for a
+            strict same-model comparison. Building this benchmark surfaced two
+            real, provider-independent problems, both fixed in <code>src/orlog/</code>
+            because they affect orlog generally, not just this benchmark:</p>
+          <ul>
+            <li><strong>gpt-5-mini incompatibility.</strong> It rejects any non-default
+              <code>temperature</code> and the legacy <code>max_tokens</code> parameter,
+              which both orlog's and Mem0's default extraction calls used — both runners
+              were switched to <code>gpt-4o-mini</code>.</li>
+            <li><strong>orlog's real-LLM derivation path failed on nearly every query, on
+              every model tested, on both providers</strong> — including orlog's own README
+              example. Root cause: the deriver received only a fact's bare stored value with
+              no attribute label or grounding text, and the system prompt never told the model
+              to restate the literal <code>entity.attribute</code> key that heimdall's SUPPORTS
+              check requires. Fixed with two small, additive changes (an <code>excerpt</code>
+              field already anticipated by the design spec, and a system-prompt instruction) —
+              orlog's full test suite (283 tests) passes unchanged.</li>
+          </ul>
+          <p>With both fixed, orlog ran on Anthropic (the provider that was
+            actually available once this was diagnosed) rather than OpenAI for
+            this final run. Full details, including why this is believed to be
+            a genuine bug fix rather than a benchmark-side workaround, are in
+            <code>benchmarks/vs_mem0/README.md</code>'s "Model note" and
+            <code>docs/superpowers/specs/2026-07-17-vs-mem0-benchmark-design.md</code>'s
+            "Known deviations" section.</p>
+        </div>
+      </div>
+    </section>
+
+    <footer class="page-footer">
+      Rerun with <code>python -m benchmarks.vs_mem0</code> (requires
+      <code>ANTHROPIC_API_KEY</code> and <code>OPENAI_API_KEY</code>). This
+      page reads its numbers from the committed <code>results.json</code> at
+      build time — republishing it does not re-run the benchmark.
+    </footer>
+  </div>
+</div>
+
+<div id="tooltip" role="tooltip" hidden></div>
+<svg id="label-measurer" width="0" height="0" style="position:absolute;visibility:hidden;pointer-events:none">
+  <text class="bar-value" x="0" y="0"></text>
+</svg>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------------
+  // Data — copied verbatim from benchmarks/vs_mem0/results.json (Task 8's
+  // committed run). Not fetched at runtime so the page works standalone.
+  // ---------------------------------------------------------------------
+  var DATA = {
+    orlog: {
+      ingest:        { mean: 29.572987984865904, p50: 30.70299979299307, p95: 38.06070005521178, n: 50, errors: 0 },
+      query_known:   { mean: 1661.0483499593101, p50: 1711.8645999580622, p95: 2617.8811001591384, n: 40, errors: 0 },
+      query_unknown: { mean: 1159.9099266653259, p50: 1446.4362002909184, p95: 1957.7699000947177, n: 15, errors: 0 },
+      accuracy:      { overall: 0.725, overall_n: 40, post_update: 0.9, post_update_n: 10 },
+      abstention:    { correct_rate: 0.4666666666666667, n: 15 },
+      tokens:        { total: 10423, n_with_tokens: 55 }
+    },
+    mem0: {
+      ingest:        { mean: 2206.1074880044907, p50: 1680.408500134945, p95: 5018.7393999658525, n: 50, errors: 0 },
+      query_known:   { mean: 204.64938251534477, p50: 203.18909967318177, p95: 242.54400003701448, n: 40, errors: 0 },
+      query_unknown: { mean: 205.4558200451235, p50: 204.88580036908388, p95: 252.0723999477923, n: 15, errors: 0 },
+      accuracy:      { overall: 0.75, overall_n: 40, post_update: 0.0, post_update_n: 10 },
+      abstention:    { correct_rate: 0.0, n: 15 },
+      tokens:        { total: 0, n_with_tokens: 0 }
+    }
+  };
+
+  var SERIES = [
+    { key: "orlog", label: "orlog" },
+    { key: "mem0", label: "Mem0" }
+  ];
+
+  // ---------------------------------------------------------------------
+  // Formatters
+  // ---------------------------------------------------------------------
+  function fmtMs(v) {
+    if (v == null) return "—";
+    if (v < 100) return v.toFixed(1) + " ms";
+    return Math.round(v).toLocaleString("en-US") + " ms";
+  }
+  function fmtMsTick(v) {
+    return Math.round(v).toLocaleString("en-US");
+  }
+  function fmtPct(v) {
+    if (v == null) return "—";
+    var p = Math.round(v * 1000) / 10; // one decimal
+    return (Number.isInteger(p) ? p.toFixed(0) : p.toFixed(1)) + "%";
+  }
+  function fmtPctTick(v) {
+    return Math.round(v * 100) + "%";
+  }
+  function fmtInt(v) {
+    return Math.round(v).toLocaleString("en-US");
+  }
+
+  var labelMeasureEl = document.querySelector("#label-measurer text");
+  function measureLabelWidth(str) {
+    labelMeasureEl.textContent = str;
+    return labelMeasureEl.getComputedTextLength();
+  }
+
+  function escapeText(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Axis helper — "nice" round ticks from a data max
+  // ---------------------------------------------------------------------
+  function computeAxis(maxVal, tickCount) {
+    tickCount = tickCount || 4;
+    if (maxVal <= 0) maxVal = 1;
+    var rawStep = maxVal / tickCount;
+    var mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    var norm = rawStep / mag;
+    var niceNorm;
+    if (norm <= 1) niceNorm = 1;
+    else if (norm <= 2) niceNorm = 2;
+    else if (norm <= 2.5) niceNorm = 2.5;
+    else if (norm <= 5) niceNorm = 5;
+    else niceNorm = 10;
+    var step = niceNorm * mag;
+    var top = step * tickCount;
+    var ticks = [];
+    for (var i = 0; i <= tickCount; i++) ticks.push(i * step);
+    return { top: top, step: step, ticks: ticks };
+  }
+
+  // ---------------------------------------------------------------------
+  // Grouped column chart — builds an SVG string + a companion table.
+  // groups: [{key,label}], series: [{key,label}]
+  // getValue(groupKey, seriesKey) -> number
+  // ---------------------------------------------------------------------
+  function buildGroupedBarChart(opts) {
+    var groups = opts.groups;
+    var series = opts.series;
+    var getValue = opts.getValue;
+    var valueFmt = opts.valueFmt;
+    var tickFmt = opts.tickFmt;
+    var ariaLabel = opts.ariaLabel || "";
+
+    var barWidth = 22, seriesGap = 4, leftPad = 54, rightPad = 16, topPad = 26, bottomPad = 34, plotHeight = 220;
+    var totalBarsWidth = series.length * barWidth + (series.length - 1) * seriesGap;
+    var groupWidth = Math.max(totalBarsWidth + 46, 120);
+    var plotWidth = groups.length * groupWidth;
+    var width = leftPad + plotWidth + rightPad;
+    var height = topPad + plotHeight + bottomPad;
+
+    var maxVal = 0;
+    groups.forEach(function (g) {
+      series.forEach(function (s) {
+        var v = getValue(g.key, s.key);
+        if (v != null && v > maxVal) maxVal = v;
+      });
+    });
+    var axis = computeAxis(maxVal, 4);
+    if (opts.hardCapTop != null && axis.top > opts.hardCapTop) {
+      var cappedStep = opts.hardCapTop / 4;
+      var cappedTicks = [];
+      for (var ci = 0; ci <= 4; ci++) cappedTicks.push(ci * cappedStep);
+      axis = { top: opts.hardCapTop, step: cappedStep, ticks: cappedTicks };
+    }
+    var baseY = topPad + plotHeight;
+
+    var gridSvg = "";
+    axis.ticks.forEach(function (t) {
+      var y = topPad + plotHeight - (t / axis.top) * plotHeight;
+      gridSvg += '<line class="gridline" x1="' + leftPad + '" x2="' + (leftPad + plotWidth) + '" y1="' + y + '" y2="' + y + '"></line>';
+      gridSvg += '<text class="axis-tick" x="' + (leftPad - 8) + '" y="' + (y + 4) + '" text-anchor="end">' + tickFmt(t) + "</text>";
+    });
+    gridSvg += '<line class="baseline-rule" x1="' + leftPad + '" x2="' + (leftPad + plotWidth) + '" y1="' + baseY + '" y2="' + baseY + '"></line>';
+
+    var barsSvg = "";
+    var labelsSvg = "";
+    var xLabelsSvg = "";
+    groups.forEach(function (g, gi) {
+      var gx = leftPad + gi * groupWidth;
+      var innerStart = gx + (groupWidth - totalBarsWidth) / 2;
+
+      // First pass: compute geometry + labels for every series in this group.
+      var items = series.map(function (s, si) {
+        var val = getValue(g.key, s.key);
+        var bx = innerStart + si * (barWidth + seriesGap);
+        var label = valueFmt(val);
+        var isZero = !(val != null && val > 0);
+        var bh = isZero ? 0 : Math.max(2, (val / axis.top) * plotHeight);
+        var by = baseY - bh;
+        var labelX = bx + barWidth / 2;
+        var labelY = isZero ? baseY - 10 : by - 6;
+        return { s: s, val: val, bx: bx, label: label, isZero: isZero, bh: bh, by: by, labelX: labelX, labelY: labelY };
+      });
+
+      // Second pass: nudge label x-positions apart if two labels at a
+      // similar height would otherwise overlap (measured against the
+      // chart's actual rendered font, not guessed).
+      for (var a = 0; a < items.length - 1; a++) {
+        var left = items[a], right = items[a + 1];
+        if (Math.abs(left.labelY - right.labelY) > 16) continue; // different rows, no risk
+        var leftW = measureLabelWidth(left.label);
+        var rightW = measureLabelWidth(right.label);
+        var needed = leftW / 2 + rightW / 2 + 4; // 4px breathing room
+        var actual = right.labelX - left.labelX;
+        if (needed > actual) {
+          var shift = (needed - actual) / 2;
+          left.labelX -= shift;
+          right.labelX += shift;
+        }
+      }
+
+      items.forEach(function (it) {
+        var s = it.s, val = it.val, bx = it.bx, label = it.label;
+        var ariaText = escapeText(s.label + ", " + g.label + ": " + label);
+        if (!it.isZero) {
+          barsSvg +=
+            '<g class="bar-g">' +
+            '<rect class="bar" x="' + bx + '" y="' + it.by + '" width="' + barWidth + '" height="' + it.bh + '" rx="4" ry="4" fill="var(--series-' + s.key + ')"></rect>' +
+            '<rect x="' + bx + '" y="' + (it.by + Math.max(it.bh - 4, 0)) + '" width="' + barWidth + '" height="' + Math.min(4, it.bh) + '" fill="var(--series-' + s.key + ')"></rect>' +
+            '<rect class="hit" tabindex="0" role="img" aria-label="' + ariaText + '" data-tt="' + ariaText + '" x="' + (bx - 4) + '" y="' + topPad + '" width="' + (barWidth + 8) + '" height="' + plotHeight + '" fill="transparent"></rect>' +
+            "</g>";
+          labelsSvg += '<text class="bar-value" x="' + it.labelX + '" y="' + it.labelY + '" text-anchor="middle">' + label + "</text>";
+        } else {
+          barsSvg +=
+            '<g class="bar-g">' +
+            '<circle class="zero-marker" cx="' + (bx + barWidth / 2) + '" cy="' + baseY + '" r="4" fill="var(--series-' + s.key + ')"></circle>' +
+            '<rect class="hit" tabindex="0" role="img" aria-label="' + ariaText + '" data-tt="' + ariaText + '" x="' + (bx - 4) + '" y="' + topPad + '" width="' + (barWidth + 8) + '" height="' + plotHeight + '" fill="transparent"></rect>' +
+            "</g>";
+          labelsSvg += '<text class="bar-value zero" x="' + it.labelX + '" y="' + it.labelY + '" text-anchor="middle">' + label + "</text>";
+        }
+      });
+      xLabelsSvg += '<text class="axis-cat" x="' + (gx + groupWidth / 2) + '" y="' + (baseY + 22) + '" text-anchor="middle">' + escapeText(g.label) + "</text>";
+    });
+
+    var svg =
+      '<svg viewBox="0 0 ' + width + " " + height + '" class="chart-svg" role="img" aria-label="' + escapeText(ariaLabel) + '">' +
+      gridSvg + barsSvg + labelsSvg + xLabelsSvg +
+      "</svg>";
+
+    return svg;
+  }
+
+  function tableHTML(headers, rows) {
+    var h = '<table class="data-table"><thead><tr>';
+    headers.forEach(function (hd, i) {
+      h += '<th scope="col">' + escapeText(hd) + "</th>";
+    });
+    h += "</tr></thead><tbody>";
+    rows.forEach(function (r) {
+      h += "<tr>";
+      r.forEach(function (c, i) {
+        if (i === 0) h += '<th scope="row">' + escapeText(c) + "</th>";
+        else h += "<td>" + escapeText(c) + "</td>";
+      });
+      h += "</tr>";
+    });
+    h += "</tbody></table>";
+    return h;
+  }
+
+  // ---------------------------------------------------------------------
+  // Chart 1: Ingest latency (mean / p50 / p95)
+  // ---------------------------------------------------------------------
+  (function () {
+    var groups = [
+      { key: "mean", label: "Mean" },
+      { key: "p50", label: "P50" },
+      { key: "p95", label: "P95" }
+    ];
+    var svg = buildGroupedBarChart({
+      groups: groups,
+      series: SERIES,
+      getValue: function (gKey, sKey) { return DATA[sKey].ingest[gKey]; },
+      valueFmt: fmtMs,
+      tickFmt: fmtMsTick,
+      ariaLabel: "Ingest latency, mean, P50, and P95, orlog vs Mem0, in milliseconds"
+    });
+    document.getElementById("chart-ingest").innerHTML = svg;
+    document.getElementById("table-ingest").innerHTML = tableHTML(
+      ["Metric", "orlog", "Mem0"],
+      [
+        ["Mean (ms)", fmtMs(DATA.orlog.ingest.mean), fmtMs(DATA.mem0.ingest.mean)],
+        ["P50 (ms)", fmtMs(DATA.orlog.ingest.p50), fmtMs(DATA.mem0.ingest.p50)],
+        ["P95 (ms)", fmtMs(DATA.orlog.ingest.p95), fmtMs(DATA.mem0.ingest.p95)],
+        ["Sample size (n)", fmtInt(DATA.orlog.ingest.n), fmtInt(DATA.mem0.ingest.n)],
+        ["Errors", fmtInt(DATA.orlog.ingest.errors), fmtInt(DATA.mem0.ingest.errors)]
+      ]
+    );
+  })();
+
+  // ---------------------------------------------------------------------
+  // Chart 2: Query latency (known vs unknown, p50)
+  // ---------------------------------------------------------------------
+  (function () {
+    var groups = [
+      { key: "known", label: "Known facts" },
+      { key: "unknown", label: "Unknown facts" }
+    ];
+    function get(gKey, sKey) {
+      var rec = gKey === "known" ? DATA[sKey].query_known : DATA[sKey].query_unknown;
+      return rec.p50;
+    }
+    var svg = buildGroupedBarChart({
+      groups: groups,
+      series: SERIES,
+      getValue: get,
+      valueFmt: fmtMs,
+      tickFmt: fmtMsTick,
+      ariaLabel: "Query latency P50, known vs unknown fact questions, orlog vs Mem0, in milliseconds"
+    });
+    document.getElementById("chart-query").innerHTML = svg;
+    document.getElementById("table-query").innerHTML = tableHTML(
+      ["Phase / metric", "orlog", "Mem0"],
+      [
+        ["Known — mean (ms)", fmtMs(DATA.orlog.query_known.mean), fmtMs(DATA.mem0.query_known.mean)],
+        ["Known — P50 (ms)", fmtMs(DATA.orlog.query_known.p50), fmtMs(DATA.mem0.query_known.p50)],
+        ["Known — P95 (ms)", fmtMs(DATA.orlog.query_known.p95), fmtMs(DATA.mem0.query_known.p95)],
+        ["Known — n", fmtInt(DATA.orlog.query_known.n), fmtInt(DATA.mem0.query_known.n)],
+        ["Unknown — mean (ms)", fmtMs(DATA.orlog.query_unknown.mean), fmtMs(DATA.mem0.query_unknown.mean)],
+        ["Unknown — P50 (ms)", fmtMs(DATA.orlog.query_unknown.p50), fmtMs(DATA.mem0.query_unknown.p50)],
+        ["Unknown — P95 (ms)", fmtMs(DATA.orlog.query_unknown.p95), fmtMs(DATA.mem0.query_unknown.p95)],
+        ["Unknown — n", fmtInt(DATA.orlog.query_unknown.n), fmtInt(DATA.mem0.query_unknown.n)]
+      ]
+    );
+  })();
+
+  // ---------------------------------------------------------------------
+  // Chart 3: Accuracy (overall vs post-update)
+  // ---------------------------------------------------------------------
+  (function () {
+    var groups = [
+      { key: "overall", label: "Overall (n=40)" },
+      { key: "post_update", label: "Post-update only (n=10)" }
+    ];
+    var svg = buildGroupedBarChart({
+      groups: groups,
+      series: SERIES,
+      getValue: function (gKey, sKey) { return DATA[sKey].accuracy[gKey]; },
+      valueFmt: fmtPct,
+      tickFmt: fmtPctTick,
+      hardCapTop: 1,
+      ariaLabel: "Accuracy, overall vs post-update-only, orlog vs Mem0"
+    });
+    document.getElementById("chart-accuracy").innerHTML = svg;
+    document.getElementById("table-accuracy").innerHTML = tableHTML(
+      ["Metric", "orlog", "Mem0"],
+      [
+        ["Overall accuracy (n=40)", fmtPct(DATA.orlog.accuracy.overall), fmtPct(DATA.mem0.accuracy.overall)],
+        ["Post-update accuracy (n=10)", fmtPct(DATA.orlog.accuracy.post_update), fmtPct(DATA.mem0.accuracy.post_update)]
+      ]
+    );
+  })();
+
+  // ---------------------------------------------------------------------
+  // Chart 4: Abstention (correct rate on unknown questions)
+  // ---------------------------------------------------------------------
+  (function () {
+    var groups = [{ key: "abstention", label: "Correct abstention rate" }];
+    var svg = buildGroupedBarChart({
+      groups: groups,
+      series: SERIES,
+      getValue: function (gKey, sKey) { return DATA[sKey].abstention.correct_rate; },
+      valueFmt: fmtPct,
+      tickFmt: fmtPctTick,
+      hardCapTop: 1,
+      ariaLabel: "Correct abstention rate on unanswerable questions, orlog vs Mem0"
+    });
+    document.getElementById("chart-abstention").innerHTML = svg;
+    document.getElementById("table-abstention").innerHTML = tableHTML(
+      ["Metric", "orlog", "Mem0"],
+      [
+        ["Correct abstention rate (n=15)", fmtPct(DATA.orlog.abstention.correct_rate), fmtPct(DATA.mem0.abstention.correct_rate)],
+        ["Implied false-positive rate", fmtPct(1 - DATA.orlog.abstention.correct_rate), fmtPct(1 - DATA.mem0.abstention.correct_rate)]
+      ]
+    );
+  })();
+
+  // ---------------------------------------------------------------------
+  // Table toggles
+  // ---------------------------------------------------------------------
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".table-toggle");
+    if (!btn) return;
+    var key = btn.getAttribute("data-target");
+    var chartEl = document.getElementById("chart-" + key);
+    var tableEl = document.getElementById("table-" + key);
+    var showingTable = !tableEl.hasAttribute("hidden");
+    if (showingTable) {
+      tableEl.setAttribute("hidden", "");
+      chartEl.removeAttribute("hidden");
+      btn.textContent = "View as table";
+      btn.setAttribute("aria-pressed", "false");
+    } else {
+      tableEl.removeAttribute("hidden");
+      chartEl.setAttribute("hidden", "");
+      btn.textContent = "View as chart";
+      btn.setAttribute("aria-pressed", "true");
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Tooltip (pointer + keyboard focus)
+  // ---------------------------------------------------------------------
+  var tooltip = document.getElementById("tooltip");
+
+  function showTooltip(target, x, y) {
+    var text = target.getAttribute("data-tt");
+    if (!text) return;
+    var parts = text.split(", ");
+    var seriesName = parts[0];
+    var rest = parts.slice(1).join(", ");
+    var colorVar = /orlog/i.test(seriesName) ? "var(--series-orlog)" : "var(--series-mem0)";
+    tooltip.innerHTML =
+      '<div class="tt-series"><i style="background:' + colorVar + '"></i>' + escapeText(seriesName) + "</div>" +
+      '<div class="tt-value">' + escapeText(rest) + "</div>";
+    tooltip.style.left = x + "px";
+    tooltip.style.top = (y - 10) + "px";
+    tooltip.removeAttribute("hidden");
+  }
+  function hideTooltip() {
+    tooltip.setAttribute("hidden", "");
+  }
+
+  document.addEventListener("pointermove", function (e) {
+    var hit = e.target.closest(".hit");
+    if (hit) showTooltip(hit, e.clientX, e.clientY);
+    else hideTooltip();
+  });
+  document.addEventListener("pointerleave", hideTooltip, true);
+
+  document.addEventListener("focusin", function (e) {
+    var hit = e.target.closest(".hit");
+    if (!hit) return;
+    var rect = hit.getBoundingClientRect();
+    showTooltip(hit, rect.left + rect.width / 2, rect.top);
+  });
+  document.addEventListener("focusout", function (e) {
+    if (e.target.closest(".hit")) hideTooltip();
+  });
+})();
+</script>
