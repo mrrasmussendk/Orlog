@@ -1,6 +1,7 @@
 """Runs the full orlog vs Mem0 benchmark end to end: both systems' raw
-runs, then scoring. Requires OPENAI_API_KEY in the environment; makes real,
-billed OpenAI API calls for every ingest and query -- see README.md.
+runs, then scoring. Requires both ANTHROPIC_API_KEY (orlog) and OPENAI_API_KEY
+(Mem0) in the environment; makes real, billed API calls to both providers
+for every ingest and query -- see README.md.
 """
 
 from __future__ import annotations

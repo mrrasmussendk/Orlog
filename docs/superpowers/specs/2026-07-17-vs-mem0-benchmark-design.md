@@ -31,7 +31,7 @@ documented in full in `benchmarks/vs_mem0/README.md`'s "Model note":
    other explanation. Fixed with two small, additive changes (`Candidate`
    gained an `excerpt` field already anticipated by spec §3.4; the system
    prompt now instructs the model to restate the question verbatim) —
-   orlog's full test suite (283 tests) passes unchanged, and
+   orlog's full test suite (287 tests) passes unchanged, and
    `Candidate.content`/ScriptedDeriver's claim format are untouched.
 
 With both fixed, the final run uses orlog on Anthropic (`claude-haiku-4-5`,
@@ -94,7 +94,7 @@ Deterministic, hand-authored, no randomness — same content on every run.
 
 - 10 fictional entities (`user:aiko`, `user:bilal`, ... — first names only,
   not real people), each with 4 attributes: `plan`, `city`, `job_title`,
-  `favorite_language`. 40 initial facts.
+  `native_language`. 40 initial facts.
 - 10 update facts: for a chosen subset of (entity, attribute) pairs already
   above, a second, later, contradicting statement (e.g. plan `Pro` →
   `Enterprise`), added to each system *after* all 40 initial facts. Tests
@@ -117,8 +117,8 @@ facts, the expected current value used for grading.
 
 **Orlog** (`benchmarks/vs_mem0/run_orlog.py`):
 - Fresh temp `Workspace` per run, `ORLOG_VAULT_KEY` generated in-process.
-- `OrlogConfig` with `deriver.backend="openai"`, `deriver.model="gpt-5-mini"`,
-  `deriver.api_key_env="OPENAI_API_KEY"`, `retrieval.embedder="BAAI/bge-small-en-v1.5"`
+- `OrlogConfig` with `deriver.backend="anthropic"`, `deriver.model="claude-haiku-4-5"`,
+  `deriver.api_key_env="ANTHROPIC_API_KEY"`, `retrieval.embedder="BAAI/bge-small-en-v1.5"`
   (the spec default — real semantic matching, comparable in spirit to Mem0's
   OpenAI embeddings).
 - Writes via `remember_tool(runtime, text, entity=, attribute=, value=)`.
@@ -129,7 +129,7 @@ facts, the expected current value used for grading.
 **Mem0** (`benchmarks/vs_mem0/run_mem0.py`):
 - `mem0.Memory()` with default config: local on-disk Qdrant (no server
   needed — `qdrant-client`'s embedded/local mode), `llm` provider `openai`
-  model `gpt-5-mini`, default embedder `text-embedding-3-small`.
+  model `gpt-4o-mini`, default embedder `text-embedding-3-small`.
 - **All entities share a single Mem0 `user_id`** (`"vs_mem0_bench"`), not one
   per entity. Reasoning: Mem0's `search()` requires a `user_id`/`agent_id`/
   `run_id` filter and only searches within that partition — giving each
@@ -195,7 +195,12 @@ require rerunning the benchmark.
 
 ## Testing
 
-This is a benchmark script, not library code with a pytest suite — its
-"test" is a real run producing sane, non-empty `results.json` output and a
+Pure logic is covered by pytest: `tests/test_benchmark_dataset.py`,
+`tests/test_benchmark_grading.py`, `tests/test_benchmark_score.py`, and
+offline smoke tests for the orlog runner in `tests/test_benchmark_run_orlog.py`.
+However, the actual API-calling orchestration (`main()` in both `run_orlog.py`
+and `run_mem0.py`) is only exercised by a real run; no automated no-API-key
+test exists for Mem0's orchestration specifically, since Mem0 has no offline
+mode. A real run produces sane, non-empty `results.json` output and a
 renderable dashboard. `benchmarks/vs_mem0/README.md` documents how to rerun
 it and the grading caveats above.

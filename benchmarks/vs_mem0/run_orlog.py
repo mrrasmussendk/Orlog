@@ -1,7 +1,7 @@
 """run_orlog.py: drives a real orlog Runtime through the benchmark dataset,
 timing every write and query, and writes one JSON record per item to
-orlog_results.json. Uses real OpenAI API calls via orlog's LLMDeriver
-(deriver.backend="openai") for every query -- see
+orlog_results.json. Uses real Anthropic API calls via orlog's LLMDeriver
+(deriver.backend="anthropic", claude-haiku-4-5 by default) for every query -- see
 docs/superpowers/specs/2026-07-17-vs-mem0-benchmark-design.md.
 """
 

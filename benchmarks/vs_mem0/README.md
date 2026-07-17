@@ -59,7 +59,7 @@ side, since they affect orlog generally, not just this benchmark:
    carrying the fact's remembered evidence text, and `huginn_llm.py`'s
    `SYSTEM_PROMPT` now explicitly instructs the model to restate the
    question verbatim in its claim. Verified against real Anthropic and
-   OpenAI calls before and after; orlog's full test suite (283 tests) passes
+   OpenAI calls before and after; orlog's full test suite (287 tests) passes
    unchanged. Since `Candidate.content` and ScriptedDeriver's own claim
    format are untouched, this is additive to the LLM-derivation path only.
 
