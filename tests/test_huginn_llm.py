@@ -14,8 +14,8 @@ from orlog.retrieval import Candidate
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
-def _candidate(event_id="ev-1", content="pro"):
-    return Candidate(event_id=event_id, content=content, valid_from=NOW, valid_to=NOW, score=1.0)
+def _candidate(event_id="ev-1", content="pro", excerpt=None):
+    return Candidate(event_id=event_id, content=content, valid_from=NOW, valid_to=NOW, score=1.0, excerpt=excerpt)
 
 
 class _QueuedCompletion:
@@ -86,6 +86,42 @@ def test_hallucinated_citation_ids_are_filtered_and_none_remaining_raises():
 
     with pytest.raises(UncitedAssertion):
         deriver.derive("user:1.plan", NOW, [_candidate()], query_id="q1", derived_at=NOW, route="fresh")
+
+
+def test_prompt_prefers_excerpt_over_bare_content_when_present():
+    """A bare stored value with no attribute label or grounding sentence
+    was verified (against real Anthropic and OpenAI models) to reliably
+    produce a spurious INSUFFICIENT, even on orlog's own README example --
+    see retrieval.py's Candidate.excerpt docstring. _render_facts must
+    prefer it over the bare `content` whenever it's set.
+    """
+    captured = {}
+
+    def capturing_completion(system, user, *, max_tokens):
+        captured["user"] = user
+        return '{"claim": "user:1.plan = pro", "citations": ["ev-1"]}', {"in": 1, "out": 1}
+
+    deriver = LLMDeriver(capturing_completion, model="test-model")
+    candidate = _candidate(content="pro", excerpt="Alice's plan is pro.")
+
+    deriver.derive("user:1.plan", NOW, [candidate], query_id="q1", derived_at=NOW, route="fresh")
+
+    assert "Alice's plan is pro." in captured["user"]
+    assert captured["user"].count("pro") == 1  # the excerpt's own "pro", not a second bare-content line
+
+
+def test_prompt_falls_back_to_bare_content_when_no_excerpt():
+    captured = {}
+
+    def capturing_completion(system, user, *, max_tokens):
+        captured["user"] = user
+        return '{"claim": "user:1.plan = pro", "citations": ["ev-1"]}', {"in": 1, "out": 1}
+
+    deriver = LLMDeriver(capturing_completion, model="test-model")
+
+    deriver.derive("user:1.plan", NOW, [_candidate(content="pro", excerpt=None)], query_id="q1", derived_at=NOW, route="fresh")
+
+    assert captured["user"].splitlines()[-1].endswith("pro")
 
 
 def test_a_mix_of_real_and_hallucinated_citations_keeps_only_the_real_ones():

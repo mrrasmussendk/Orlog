@@ -44,12 +44,22 @@ SYSTEM_PROMPT = (
     "that support your answer. If the facts do not contain the answer, "
     f"output exactly the token {INSUFFICIENT_TOKEN} and nothing else. "
     'Otherwise respond with JSON only, matching '
-    '{"claim": string, "citations": [event_id, ...]}.'
+    '{"claim": string, "citations": [event_id, ...]}. '
+    'The "claim" string MUST include the exact question text given after '
+    '"Question:" verbatim, together with the answer value, in the form '
+    '"<question> = <value>" -- e.g. if the question is "X" and the answer '
+    'value is "Y", respond {"claim": "X = Y", "citations": [...]}.'
 )
 
 
 def _render_facts(candidates: list[Candidate]) -> str:
-    lines = [f"[{c.event_id}] ({c.valid_from.date().isoformat()}) {c.content}" for c in candidates]
+    # Prefer excerpt (the remembered evidence sentence) over the bare
+    # content value -- a real model reading just a bare value with no
+    # attribute label or grounding text reliably answers INSUFFICIENT even
+    # on orlog's own README example (see retrieval.py's Candidate.excerpt
+    # docstring); ScriptedDeriver, unaffected by this function, still uses
+    # content directly.
+    lines = [f"[{c.event_id}] ({c.valid_from.date().isoformat()}) {c.excerpt or c.content}" for c in candidates]
     return "\n".join(lines)
 
 

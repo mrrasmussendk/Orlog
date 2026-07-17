@@ -30,6 +30,17 @@ class Candidate(BaseModel):
     valid_to: datetime
     score: float
     importance: float = 1.0
+    # spec §3.4's optional candidate.excerpt: the remembered evidence_span,
+    # or the full remembered text if no explicit span was given. `content`
+    # (the bare stored value, e.g. "Pro") is unchanged -- ScriptedDeriver's
+    # extraction (huginn.py) still keys off it directly. `excerpt` is
+    # additive context for a real LLM deriver's prompt (huginn_llm.py's
+    # _render_facts): a bare value with no attribute label or grounding
+    # sentence tying it to the question was verified (against real
+    # Anthropic and OpenAI models) to produce a spurious INSUFFICIENT even
+    # on orlog's own README example -- the excerpt is what the model needs
+    # to answer confidently instead.
+    excerpt: str | None = None
 
 
 class RetrievalResult(BaseModel):
@@ -78,6 +89,7 @@ def retrieve_current_fact(
             valid_to=view.windows[event_id].valid_to,
             score=1.0,
             importance=1.0,
+            excerpt=events_by_id[event_id].payload.get("evidence_span") or events_by_id[event_id].payload.get("text"),
         )
         for event_id in in_window[:k]
     ]
