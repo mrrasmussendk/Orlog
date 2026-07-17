@@ -24,6 +24,9 @@ openai = ["openai>=1.0"]
 dev = [
     "pytest>=8",
 ]
+benchmark = [
+    "mem0ai>=2.0",
+]
 
 [project.scripts]
 orlog = "orlog.cli:main"
@@ -38,6 +41,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["-m", "not integration"]
+pythonpath = ["."]
 markers = [
     "integration: makes real Anthropic API calls; requires ANTHROPIC_API_KEY, skipped otherwise",
 ]
