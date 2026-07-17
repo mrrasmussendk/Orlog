@@ -19,7 +19,7 @@ from mem0 import Memory
 BENCHMARK_USER_ID = "vs_mem0_bench"
 
 
-def build_memory(qdrant_path: Path, *, llm_model: str = "gpt-5-mini") -> Memory:
+def build_memory(qdrant_path: Path, *, llm_model: str = "gpt-4o-mini") -> Memory:
     return Memory.from_config({
         "vector_store": {"provider": "qdrant", "config": {"path": str(qdrant_path)}},
         "llm": {"provider": "openai", "config": {"model": llm_model}},

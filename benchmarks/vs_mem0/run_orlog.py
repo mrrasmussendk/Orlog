@@ -22,14 +22,20 @@ from orlog.workspace import Workspace
 from benchmarks.vs_mem0.dataset import INITIAL_FACTS, KNOWN_QUESTIONS, UNKNOWN_QUESTIONS, UPDATE_FACTS
 
 
+_API_KEY_ENV_BY_BACKEND = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+
+
 def build_runtime(
-    workspace_dir: Path, *, deriver_backend: str = "openai",
-    deriver_model: str = "gpt-5-mini", embedder: str = "BAAI/bge-small-en-v1.5",
+    workspace_dir: Path, *, deriver_backend: str = "anthropic",
+    deriver_model: str = "claude-haiku-4-5", embedder: str = "BAAI/bge-small-en-v1.5",
 ) -> Runtime:
     os.environ["ORLOG_VAULT_KEY"] = generate_key()
     config = OrlogConfig(
         workspace=WorkspaceConfig(name="vs_mem0_bench"),
-        deriver=DeriverConfig(backend=deriver_backend, model=deriver_model, api_key_env="OPENAI_API_KEY"),
+        deriver=DeriverConfig(
+            backend=deriver_backend, model=deriver_model,
+            api_key_env=_API_KEY_ENV_BY_BACKEND.get(deriver_backend, "OPENAI_API_KEY"),
+        ),
         retrieval=RetrievalConfig(embedder=embedder),
     )
     return Runtime(Workspace(workspace_dir), config)

@@ -3,6 +3,44 @@
 Status: approved for planning
 Date: 2026-07-17
 
+## Known deviations found by actually running the benchmark
+
+This spec originally called for `gpt-5-mini` throughout (see Goals), with
+zero changes to `src/orlog/` (see Non-goals). Two real, provider-independent
+problems surfaced only from actually executing Task 8 end to end, both
+documented in full in `benchmarks/vs_mem0/README.md`'s "Model note":
+
+1. **`gpt-5-mini` incompatibility.** It rejects any non-default
+   `temperature` and the legacy `max_tokens` parameter — incompatible with
+   both orlog's `OpenAICompletion` (hardcoded `temperature=0`) and Mem0's
+   default extraction (`temperature=0.1`). Both runners were switched to
+   `gpt-4o-mini`.
+
+2. **orlog's real-LLM derivation path failed near-universally, on every
+   model tested, on both providers, including orlog's own README example**
+   — not a model-choice problem at all. Root cause: `Candidate.content`
+   (`src/orlog/retrieval.py`) gave the deriver only a fact's bare value,
+   with no attribute label or grounding text, and the deriver's
+   `SYSTEM_PROMPT` never told the model it had to restate the literal
+   `"{entity}.{attribute}"` key in its claim (a requirement heimdall's V4
+   SUPPORTS check deliberately enforces, for good reason — see
+   `heimdall.py`'s own module docstring). This is a real bug in orlog
+   itself, not a benchmark-side issue, and the benchmark's own
+   "zero changes to `src/orlog/`" non-goal was explicitly lifted for this
+   one fix, with the user's direct approval, once evidence ruled out every
+   other explanation. Fixed with two small, additive changes (`Candidate`
+   gained an `excerpt` field already anticipated by spec §3.4; the system
+   prompt now instructs the model to restate the question verbatim) —
+   orlog's full test suite (283 tests) passes unchanged, and
+   `Candidate.content`/ScriptedDeriver's claim format are untouched.
+
+With both fixed, the final run uses orlog on Anthropic (`claude-haiku-4-5`,
+its own calibrated default) and Mem0 on OpenAI (`gpt-4o-mini`) — cross-
+provider rather than same-model, since that was the working combination
+available when this was diagnosed. Every other design decision below
+(dataset, shared-scope Mem0 bucket, substring grading, metrics) is
+unchanged.
+
 ## Motivation
 
 orlog's whole pitch (`README.md`) is that it never returns a confident-sounding
