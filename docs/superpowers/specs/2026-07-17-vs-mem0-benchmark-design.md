@@ -92,12 +92,24 @@ facts, the expected current value used for grading.
 - `mem0.Memory()` with default config: local on-disk Qdrant (no server
   needed — `qdrant-client`'s embedded/local mode), `llm` provider `openai`
   model `gpt-5-mini`, default embedder `text-embedding-3-small`.
-- One Mem0 `user_id` per entity, mirroring orlog's per-entity keys.
-- Writes via `m.add(text, user_id=entity)` (`infer=True`, Mem0's default —
-  lets its own ADD/UPDATE/DELETE logic run, since that's the feature being
-  tested for the update facts).
-- Queries via `m.search(question, filters={"user_id": entity})`, top-1 result
-  used for grading.
+- **All entities share a single Mem0 `user_id`** (`"vs_mem0_bench"`), not one
+  per entity. Reasoning: Mem0's `search()` requires a `user_id`/`agent_id`/
+  `run_id` filter and only searches within that partition — giving each
+  entity its own `user_id` would let Mem0 search a pre-scoped ~5-fact pool
+  while orlog's free-text `recall()` has no such scoping and must
+  semantically disambiguate the right entity out of the *entire* shared
+  event log. A single shared bucket for Mem0 mirrors orlog's single global
+  log, so both systems face the same challenge: given a natural-language
+  question, find the right person's fact among all of them. This also makes
+  the update test harder (and more realistic) for Mem0, since its
+  ADD/UPDATE/DELETE decision has to correctly match a new statement to the
+  right prior memory among all 40+ stored ones, not just among one entity's
+  four.
+- Writes via `m.add(text, user_id="vs_mem0_bench")` (`infer=True`, Mem0's
+  default — lets its own ADD/UPDATE/DELETE logic run, since that's the
+  feature being tested for the update facts).
+- Queries via `m.search(question, filters={"user_id": "vs_mem0_bench"})`,
+  top-1 result used for grading.
 
 Both runners write raw per-item timings and outcomes to their own JSON file
 (`orlog_results.json`, `mem0_results.json`); per-item exceptions are caught,
