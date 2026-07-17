@@ -105,11 +105,14 @@ def run_queries(runtime: Runtime, questions: list, phase: str) -> list[dict]:
 def main(out_path: Path) -> list[dict]:
     with tempfile.TemporaryDirectory(prefix="orlog_vs_mem0_") as tmp:
         runtime = build_runtime(Path(tmp) / "workspace")
-        warm_up_embedder(runtime)
-        records = []
-        records += ingest(runtime, INITIAL_FACTS + UPDATE_FACTS)
-        records += run_queries(runtime, KNOWN_QUESTIONS, "query_known")
-        records += run_queries(runtime, UNKNOWN_QUESTIONS, "query_unknown")
+        try:
+            warm_up_embedder(runtime)
+            records = []
+            records += ingest(runtime, INITIAL_FACTS + UPDATE_FACTS)
+            records += run_queries(runtime, KNOWN_QUESTIONS, "query_known")
+            records += run_queries(runtime, UNKNOWN_QUESTIONS, "query_unknown")
+        finally:
+            runtime.close()
     Path(out_path).write_text(json.dumps(records, indent=2), encoding="utf-8")
     return records
 

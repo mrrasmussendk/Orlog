@@ -52,3 +52,52 @@ def test_build_runtime_and_ingest_query_round_trip_offline(tmp_path):
     assert query_records[0]["phase"] == "query_known"
     assert query_records[0]["status"] == "ok"
     assert query_records[0]["expected_value"] == "Pro"
+
+
+def test_main_completes_without_resource_leak(tmp_path, monkeypatch):
+    """Regression test for runtime.close() bug: verifies that main() completes
+    without PermissionError when closing the TemporaryDirectory (Windows sqlite3
+    cleanup issue), and that the output JSON is valid.
+    """
+    import json
+
+    # Create minimal test data to keep test fast and offline
+    test_initial_facts = [Fact(entity="user:test", attribute="plan", value="Pro", statement="Test plan is Pro.")]
+    test_update_facts = [Fact(entity="user:test", attribute="status", value="active", statement="Test status is active.")]
+    test_known_questions = [Question(entity="user:test", attribute="plan", question="What is test plan?", expected_value="Pro")]
+    test_unknown_questions = [Question(entity="user:test", attribute="shoe_size", question="What is test shoe size?", expected_value="unknown")]
+
+    # Monkeypatch dataset constants to use tiny test data
+    monkeypatch.setattr(run_orlog, "INITIAL_FACTS", test_initial_facts)
+    monkeypatch.setattr(run_orlog, "UPDATE_FACTS", test_update_facts)
+    monkeypatch.setattr(run_orlog, "KNOWN_QUESTIONS", test_known_questions)
+    monkeypatch.setattr(run_orlog, "UNKNOWN_QUESTIONS", test_unknown_questions)
+
+    # Monkeypatch build_runtime to use offline backends (scripted deriver + hashing embedder)
+    original_build_runtime = run_orlog.build_runtime
+
+    def mock_build_runtime(workspace_dir, **kwargs):
+        return original_build_runtime(workspace_dir, deriver_backend="scripted", embedder="hashing")
+
+    monkeypatch.setattr(run_orlog, "build_runtime", mock_build_runtime)
+
+    # Call main() and verify no exception (especially PermissionError on cleanup)
+    out_path = tmp_path / "results.json"
+    records = run_orlog.main(out_path)
+
+    # Verify output file exists and is valid JSON with expected structure
+    assert out_path.exists(), "Output JSON file was not created"
+    with open(out_path) as f:
+        persisted_records = json.load(f)
+
+    # Verify records list is not empty and has expected structure
+    assert len(persisted_records) > 0, "Records list is empty"
+    assert len(records) == len(persisted_records), "In-memory records don't match persisted records"
+
+    # Verify each record has the expected shape
+    for record in persisted_records:
+        assert "phase" in record
+        assert "entity" in record
+        assert "attribute" in record
+        assert "latency_ms" in record
+        assert "status" in record
