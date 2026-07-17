@@ -11,6 +11,8 @@
     --border:         rgba(17,17,17,0.10);
     --orlog:          #1f66c9;
     --mem0:           #1c8f4a;
+    --orlog-tint:     #eaf1fc;
+    --orlog-badge-bg: #dbe9fa;
   }
   :root[data-theme="dark"] {
     --surface:        #17181a;
@@ -23,6 +25,8 @@
     --border:         rgba(255,255,255,0.10);
     --orlog:          #5b9bf0;
     --mem0:           #4cbb7d;
+    --orlog-tint:     #182437;
+    --orlog-badge-bg: #223760;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -36,6 +40,8 @@
       --border:         rgba(255,255,255,0.10);
       --orlog:          #5b9bf0;
       --mem0:           #4cbb7d;
+      --orlog-tint:     #182437;
+      --orlog-badge-bg: #223760;
     }
   }
 
@@ -76,10 +82,26 @@
     overflow: hidden;
   }
   .stat {
+    position: relative;
     background: var(--surface);
     padding: 18px 18px 16px;
   }
-  .stat .label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-mute); margin: 0 0 10px; }
+  .stat.win {
+    background: var(--orlog-tint);
+  }
+  .stat.win::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: var(--orlog);
+  }
+  .stat .label-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; }
+  .stat .label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-mute); margin: 0; }
+  .win-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--orlog); background: var(--orlog-badge-bg);
+    border-radius: 999px; padding: 2px 8px 2px 6px;
+  }
+  .win-badge svg { width: 9px; height: 9px; }
   .stat .pair { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .stat .num { font-size: 25px; font-weight: 700; letter-spacing: -0.01em; line-height: 1; }
   .stat .num.orlog { color: var(--orlog); }
@@ -175,25 +197,31 @@
   </header>
 
   <div class="stat-row">
-    <div class="stat">
-      <p class="label">Overall accuracy</p>
-      <div class="pair"><span class="num orlog">72.5%</span><span class="vs">vs</span><span class="num mem0">75.0%</span></div>
-      <p class="note">A near-tie that hides everything below.</p>
-    </div>
-    <div class="stat">
-      <p class="label">Accuracy on updated facts</p>
+    <div class="stat win">
+      <div class="label-row">
+        <p class="label">Accuracy on updated facts</p>
+        <span class="win-badge"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6.2l2.6 2.6L10 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>orlog</span>
+      </div>
       <div class="pair"><span class="num orlog">90%</span><span class="vs">vs</span><span class="num mem0">0%</span></div>
       <p class="note">Mem0 never reflected an update, in this setup.</p>
     </div>
-    <div class="stat">
-      <p class="label">Correct "I don't know"</p>
+    <div class="stat win">
+      <div class="label-row">
+        <p class="label">Correct "I don't know"</p>
+        <span class="win-badge"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6.2l2.6 2.6L10 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>orlog</span>
+      </div>
       <div class="pair"><span class="num orlog">46.7%</span><span class="vs">vs</span><span class="num mem0">0%</span></div>
       <p class="note">Mem0 always answers — right or wrong.</p>
     </div>
     <div class="stat">
-      <p class="label">Query latency (p50)</p>
+      <div class="label-row"><p class="label">Overall accuracy</p></div>
+      <div class="pair"><span class="num orlog">72.5%</span><span class="vs">vs</span><span class="num mem0">75.0%</span></div>
+      <p class="note">Near-tied — the two rows above are why.</p>
+    </div>
+    <div class="stat">
+      <div class="label-row"><p class="label">Query latency (p50)</p></div>
       <div class="pair"><span class="num orlog">1,712</span><span class="vs">vs</span><span class="num mem0">203</span></div>
-      <p class="note">Milliseconds. orlog verifies every read.</p>
+      <p class="note">Milliseconds. Mem0 is faster here — orlog verifies every read.</p>
     </div>
   </div>
 
@@ -241,7 +269,7 @@
           </div>
         </div>
         <div class="chart-body" id="chart-accuracy"></div>
-        <p class="caption">Same 40-question overall score, split out to the 10 whose answer changed after a later update (small n — read with that in mind).</p>
+        <p class="caption">Overall (n=40) is a near-tie. <strong style="color:var(--orlog)">Post-update (n=10) is where orlog pulls ahead</strong> — 9 of 10 right, vs. 0 of 10 for Mem0 (small n — read with that in mind).</p>
         <button class="table-toggle" data-target="accuracy" aria-pressed="false">View as table</button>
         <div class="table-wrap" id="table-accuracy" hidden></div>
       </div>
@@ -252,6 +280,7 @@
             <p class="card-title">Abstention on unanswerable questions</p>
             <p class="card-sub">15 questions per system, never-stored attributes</p>
           </div>
+          <span class="win-badge"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6.2l2.6 2.6L10 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>orlog</span>
         </div>
         <div class="chart-body" id="chart-abstention"></div>
         <p class="caption">Mem0 has no abstain concept, so its false-positive rate is structurally 100% here — not a penalty for a feature it never claimed.</p>
