@@ -1,419 +1,289 @@
-<title>orlog vs Mem0 — Benchmark Dashboard</title>
+<title>orlog vs Mem0 — Benchmark</title>
 <style>
-  /* ---------- palette (dataviz skill reference palette, 2 categorical slots) ---------- */
-  .viz-root {
-    color-scheme: light;
-    --surface-1:      #fcfcfb;
-    --page-plane:     #f9f9f7;
-    --text-primary:   #0b0b0b;
-    --text-secondary: #52514e;
-    --text-muted:     #898781;
-    --gridline:       #e1e0d9;
-    --baseline:       #c3c2b7;
-    --border:         rgba(11,11,11,0.10);
-    --series-orlog:   #2a78d6; /* categorical slot 1 */
-    --series-mem0:    #008300; /* categorical slot 2 */
-    --success-text:   #006300;
+  :root {
+    --surface:        #ffffff;
+    --page:           #f6f6f4;
+    --ink:            #111111;
+    --ink-soft:       #55534c;
+    --ink-mute:       #8a8779;
+    --line:           #e4e2d9;
+    --line-strong:    #c9c6b8;
+    --border:         rgba(17,17,17,0.10);
+    --orlog:          #1f66c9;
+    --mem0:           #1c8f4a;
+  }
+  :root[data-theme="dark"] {
+    --surface:        #17181a;
+    --page:           #0d0e0f;
+    --ink:            #f5f5f2;
+    --ink-soft:       #b9b7ac;
+    --ink-mute:       #837f72;
+    --line:           #2a2b28;
+    --line-strong:    #3a3b36;
+    --border:         rgba(255,255,255,0.10);
+    --orlog:          #5b9bf0;
+    --mem0:           #4cbb7d;
   }
   @media (prefers-color-scheme: dark) {
-    :root:where(:not([data-theme="light"])) .viz-root {
-      color-scheme: dark;
-      --surface-1:      #1a1a19;
-      --page-plane:     #0d0d0d;
-      --text-primary:   #ffffff;
-      --text-secondary: #c3c2b7;
-      --text-muted:     #898781;
-      --gridline:       #2c2c2a;
-      --baseline:       #383835;
+    :root:not([data-theme="light"]) {
+      --surface:        #17181a;
+      --page:           #0d0e0f;
+      --ink:            #f5f5f2;
+      --ink-soft:       #b9b7ac;
+      --ink-mute:       #837f72;
+      --line:           #2a2b28;
+      --line-strong:    #3a3b36;
       --border:         rgba(255,255,255,0.10);
-      --series-orlog:   #3987e5;
-      --series-mem0:    #008300;
-      --success-text:   #0ca30c;
+      --orlog:          #5b9bf0;
+      --mem0:           #4cbb7d;
     }
-  }
-  :root[data-theme="dark"] .viz-root {
-    color-scheme: dark;
-    --surface-1:      #1a1a19;
-    --page-plane:     #0d0d0d;
-    --text-primary:   #ffffff;
-    --text-secondary: #c3c2b7;
-    --text-muted:     #898781;
-    --gridline:       #2c2c2a;
-    --baseline:       #383835;
-    --border:         rgba(255,255,255,0.10);
-    --series-orlog:   #3987e5;
-    --series-mem0:    #008300;
-    --success-text:   #0ca30c;
   }
 
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body {
-    background: var(--page-plane);
-    color: var(--text-primary);
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page);
+    color: var(--ink);
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
-  .viz-root { background: var(--page-plane); min-height: 100%; }
-  .wrap { max-width: 1100px; margin: 0 auto; padding: 40px 24px 64px; }
-
-  header.page-header h1 { font-size: 28px; font-weight: 700; margin: 0 0 8px; letter-spacing: -0.01em; }
-  header.page-header .subtitle { font-size: 16px; color: var(--text-secondary); margin: 0 0 4px; max-width: 68ch; line-height: 1.5; }
-  header.page-header .provenance { font-size: 12.5px; color: var(--text-muted); margin: 14px 0 0; }
-  header.page-header .provenance code { font-family: inherit; background: var(--surface-1); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
-
-  .legend-global { display: flex; gap: 18px; margin: 18px 0 0; font-size: 13px; color: var(--text-secondary); }
-  .legend-item { display: inline-flex; align-items: center; gap: 6px; }
-  .legend-item i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
-
-  section { margin-top: 40px; }
-  section > h2 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin: 0 0 14px; }
-
-  /* ---------- callouts ---------- */
-  .callout-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
-  .callout {
-    position: relative; overflow: hidden;
-    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
-    padding: 16px 18px 16px 21px;
+  a { color: var(--orlog); }
+  code {
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 0.9em;
+    background: var(--page);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0 5px;
   }
-  .callout::before {
-    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
-    background: var(--text-muted);
+
+  .wrap { max-width: 980px; margin: 0 auto; padding: 48px 24px 72px; }
+
+  /* ---------- header ---------- */
+  h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 10px; color: var(--ink); }
+  .lede { font-size: 16px; color: var(--ink-soft); line-height: 1.55; margin: 0 0 14px; max-width: 62ch; }
+  .provenance { font-size: 12px; color: var(--ink-mute); margin: 0; }
+
+  /* ---------- stat row ---------- */
+  .stat-row {
+    margin-top: 34px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
   }
-  .callout.accent-orlog::before { background: var(--series-orlog); }
-  .callout.accent-mem0::before { background: var(--series-mem0); }
-  .callout.accent-split::before {
-    background: linear-gradient(to bottom, var(--series-orlog) 0%, var(--series-orlog) 50%, var(--series-mem0) 50%, var(--series-mem0) 100%);
+  .stat {
+    background: var(--surface);
+    padding: 18px 18px 16px;
   }
-  .callout .eyebrow { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin: 0 0 6px; }
-  .callout .headline { font-size: 15.5px; font-weight: 600; margin: 0 0 6px; line-height: 1.35; }
-  .callout .body { font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin: 0; }
+  .stat .label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-mute); margin: 0 0 10px; }
+  .stat .pair { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .stat .num { font-size: 25px; font-weight: 700; letter-spacing: -0.01em; line-height: 1; }
+  .stat .num.orlog { color: var(--orlog); }
+  .stat .num.mem0 { color: var(--mem0); }
+  .stat .vs { font-size: 13px; color: var(--ink-mute); }
+  .stat .note { font-size: 12.5px; color: var(--ink-soft); margin: 8px 0 0; line-height: 1.4; }
+
+  /* ---------- sections ---------- */
+  section { margin-top: 44px; }
+  section > h2 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-mute); margin: 0 0 16px; }
+
+  .legend { display: flex; gap: 16px; font-size: 12.5px; color: var(--ink-soft); }
+  .legend .item { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+  i.orlog { background: var(--orlog); }
+  i.mem0 { background: var(--mem0); }
 
   /* ---------- chart cards ---------- */
-  .chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 20px; }
-  .chart-card {
-    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
-    padding: 20px 22px 18px;
+  .chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 16px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px 16px;
   }
-  .chart-card.full { grid-column: 1 / -1; }
-  .chart-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 4px; flex-wrap: wrap; }
-  .chart-title { font-size: 15px; font-weight: 700; margin: 0; }
-  .chart-subtitle { font-size: 12.5px; color: var(--text-secondary); margin: 3px 0 0; }
-  .chart-legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
-  .chart-legend .legend-item i { width: 9px; height: 9px; }
+  .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 2px; flex-wrap: wrap; }
+  .card-title { font-size: 14.5px; font-weight: 700; margin: 0; color: var(--ink); }
+  .card-sub { font-size: 12px; color: var(--ink-mute); margin: 2px 0 0; }
 
-  .chart-body-wrap { margin-top: 10px; overflow-x: auto; }
+  .chart-body { overflow-x: auto; margin-top: 8px; }
   svg.chart-svg { display: block; width: 100%; height: auto; }
-  .gridline { stroke: var(--gridline); stroke-width: 1; }
-  .baseline-rule { stroke: var(--baseline); stroke-width: 1; }
-  .axis-tick { font-size: 11px; fill: var(--text-muted); font-variant-numeric: tabular-nums; }
-  .axis-cat { font-size: 12px; fill: var(--text-secondary); }
-  .bar-value { font-size: 11.5px; fill: var(--text-primary); font-weight: 600; }
-  .bar-value.zero { fill: var(--text-muted); font-weight: 600; }
-  .bar { transition: filter 0.1s ease; }
+  .gridline { stroke: var(--line); stroke-width: 1; }
+  .baseline-rule { stroke: var(--line-strong); stroke-width: 1; }
+  .axis-tick { font-size: 10.5px; fill: var(--ink-mute); font-variant-numeric: tabular-nums; }
+  .axis-cat { font-size: 11.5px; fill: var(--ink-soft); }
+  .bar-value { font-size: 11px; fill: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .bar-value.zero { fill: var(--ink-mute); }
   .hit { cursor: pointer; }
-  .hit:hover + .bar-value,
   .bar-g:has(.hit:hover) .bar,
-  .bar-g:has(.hit:focus-visible) .bar { filter: brightness(1.12); }
-  .bar-g:has(.hit:focus-visible) .hit { outline: 2px solid var(--text-primary); outline-offset: 1px; }
-  .zero-marker { stroke: var(--surface-1); stroke-width: 1.5; }
+  .bar-g:has(.hit:focus-visible) .bar { filter: brightness(1.15); }
+  .bar-g:has(.hit:focus-visible) .hit { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .zero-marker { stroke: var(--surface); stroke-width: 1.5; }
 
-  .chart-caption { font-size: 12px; color: var(--text-muted); margin: 10px 0 0; line-height: 1.5; }
+  .caption { font-size: 12.5px; color: var(--ink-soft); margin: 10px 0 0; line-height: 1.5; }
 
   .table-toggle {
-    font-size: 12px; font-weight: 600; color: var(--text-secondary);
+    font-size: 11.5px; font-weight: 600; color: var(--ink-soft);
     background: transparent; border: 1px solid var(--border); border-radius: 6px;
-    padding: 4px 10px; cursor: pointer; white-space: nowrap;
+    padding: 3px 9px; cursor: pointer; margin-top: 8px;
   }
-  .table-toggle:hover { background: var(--page-plane); }
-  .table-wrap { margin-top: 12px; overflow-x: auto; }
-  table.data-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  table.data-table th, table.data-table td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--gridline); font-variant-numeric: tabular-nums; }
+  .table-toggle:hover { background: var(--page); }
+  table.data-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+  table.data-table th, table.data-table td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
   table.data-table th[scope="row"], table.data-table th[scope="col"]:first-child { text-align: left; font-variant-numeric: normal; }
-  table.data-table thead th { color: var(--text-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; border-bottom: 1px solid var(--baseline); }
-  table.data-table tbody th { font-weight: 600; color: var(--text-primary); }
-
+  table.data-table thead th { color: var(--ink-mute); font-weight: 600; font-size: 10.5px; text-transform: uppercase; }
+  table.data-table tbody th { font-weight: 600; }
   [hidden] { display: none !important; }
 
-  /* ---------- token section (stat tile + empty state) ---------- */
-  .token-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-top: 10px; }
-  .stat-tile { border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; background: var(--page-plane); }
-  .stat-tile .stat-label { font-size: 12px; color: var(--text-secondary); margin: 0 0 8px; display: flex; align-items: center; gap: 7px; }
-  .stat-tile .stat-label i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; background: var(--series-orlog); }
-  .stat-tile .stat-value { font-size: 34px; font-weight: 700; line-height: 1.1; margin: 0; }
-  .stat-tile .stat-value .unit { font-size: 16px; font-weight: 600; color: var(--text-secondary); margin-left: 4px; }
-  .stat-tile .stat-sub { font-size: 12.5px; color: var(--text-muted); margin: 8px 0 0; }
-
-  .empty-state { border: 1px dashed var(--border); border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; justify-content: center; min-height: 100%; }
-  .empty-state .stat-label { font-size: 12px; color: var(--text-secondary); margin: 0 0 8px; display: flex; align-items: center; gap: 7px; }
-  .empty-state .stat-label i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; background: var(--series-mem0); opacity: 0.35; }
-  .empty-state .empty-value { font-size: 20px; font-weight: 700; color: var(--text-muted); margin: 0; }
-  .empty-state .empty-detail { font-size: 12.5px; color: var(--text-muted); margin: 8px 0 0; line-height: 1.5; }
-
   /* ---------- methodology ---------- */
-  .methodology { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 22px 24px; }
-  .methodology h3 { font-size: 13.5px; margin: 0 0 8px; }
-  .methodology p, .methodology li { font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
-  .methodology ul { margin: 6px 0 16px; padding-left: 20px; }
-  .methodology ul:last-child { margin-bottom: 0; }
-  .methodology code { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 12px; background: var(--page-plane); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
-  .methodology .bugs-note { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .methodology { font-size: 13.5px; color: var(--ink-soft); line-height: 1.65; }
+  .methodology ul { margin: 0; padding-left: 20px; }
+  .methodology li { margin-bottom: 6px; }
+  .methodology li:last-child { margin-bottom: 0; }
 
-  footer.page-footer { margin-top: 40px; font-size: 12px; color: var(--text-muted); line-height: 1.6; }
-  footer.page-footer code { font-family: ui-monospace, "SF Mono", Consolas, monospace; background: var(--surface-1); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+  footer { margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-mute); line-height: 1.6; }
 
   /* ---------- tooltip ---------- */
   #tooltip {
     position: fixed; pointer-events: none; z-index: 1000;
-    background: #0b0b0b; color: #ffffff; border-radius: 6px; padding: 7px 10px;
+    background: #111111; color: #ffffff; border-radius: 6px; padding: 6px 9px;
     font-size: 12px; line-height: 1.4; max-width: 220px;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.3);
     transform: translate(-50%, -100%);
   }
-  #tooltip .tt-series { display: flex; align-items: center; gap: 6px; color: #d8d8d5; font-weight: 500; }
+  #tooltip .tt-series { display: flex; align-items: center; gap: 6px; color: #cfcfc9; font-weight: 500; }
   #tooltip .tt-series i { width: 8px; height: 2px; display: inline-block; }
-  #tooltip .tt-value { font-weight: 700; color: #ffffff; }
+  #tooltip .tt-value { font-weight: 700; }
 </style>
 
-<div class="viz-root">
-  <div class="wrap">
-    <header class="page-header">
-      <h1>orlog vs Mem0 — benchmark dashboard</h1>
-      <p class="subtitle">
-        A same-inputs, real-API benchmark of orlog against
-        <a href="https://github.com/mem0ai/mem0" style="color:inherit">Mem0</a> on
-        speed, accuracy, and abstention behavior. The headline accuracy numbers
-        are nearly tied — that hides the real story, which is below.
-      </p>
-      <p class="provenance">
-        Snapshot committed <code>2026-07-17</code> from
-        <code>benchmarks/vs_mem0/results.json</code>. Numbers drift slightly
-        between runs (real LLM calls); this is one committed run, not a
-        reproducibility guarantee. Full methodology in
-        <code>benchmarks/vs_mem0/README.md</code>.
-      </p>
-      <div class="legend-global">
-        <span class="legend-item"><i style="background:var(--series-orlog)"></i>orlog</span>
-        <span class="legend-item"><i style="background:var(--series-mem0)"></i>Mem0</span>
-      </div>
-    </header>
+<div class="wrap">
+  <header>
+    <h1>orlog vs Mem0</h1>
+    <p class="lede">
+      The same facts and questions, run through both systems for real —
+      no mocks, no LLM judge. Overall accuracy looks nearly tied. It isn't
+      once you look past the headline number.
+    </p>
+    <p class="provenance">
+      One committed run, <code>2026-07-17</code>, from
+      <code>results.json</code>. Real LLM calls drift slightly between
+      runs — full methodology in <code>README.md</code>.
+    </p>
+  </header>
 
-    <section aria-label="Key findings">
-      <h2>The nuance the headline number hides</h2>
-      <div class="callout-grid">
-        <div class="callout">
-          <p class="eyebrow">Overall accuracy</p>
-          <p class="headline">72.5% (orlog) vs 75.0% (Mem0) — near tie</p>
-          <p class="body">A single blended score across 40 questions makes the
-            two systems look almost identical. They get there in very
-            different ways — see the next three cards.</p>
-        </div>
-        <div class="callout accent-split">
-          <p class="eyebrow">Post-update accuracy</p>
-          <p class="headline">orlog 90% vs Mem0 0%</p>
-          <p class="body">On the 10 questions about facts that were later
-            updated, Mem0 answered every single one with the stale
-            pre-update value in this benchmark's shared-bucket configuration
-            — verified as a real behavior, not a grading bug. orlog got 9 of 10 right.</p>
-        </div>
-        <div class="callout accent-orlog">
-          <p class="eyebrow">Abstention on unanswerable questions</p>
-          <p class="headline">orlog 46.7% vs Mem0 0%</p>
-          <p class="body">orlog correctly says "I don't know" on close to half
-            of genuinely unanswerable questions. Mem0 has no abstain concept —
-            it always hands back its nearest-scoring memory, right or wrong,
-            so it is never correct here.</p>
-        </div>
-        <div class="callout">
-          <p class="eyebrow">Speed cuts both ways</p>
-          <p class="headline">Mem0 reads ~8x faster · orlog writes ~55x faster</p>
-          <p class="body">Query p50: 203&nbsp;ms (Mem0) vs 1,712&nbsp;ms (orlog).
-            Ingest p50: 31&nbsp;ms (orlog) vs 1,680&nbsp;ms (Mem0). Each
-            system is faster at the opposite half of the workload.</p>
-        </div>
-      </div>
-    </section>
-
-    <section aria-label="Charts">
-      <h2>The numbers</h2>
-      <div class="chart-grid">
-
-        <!-- Ingest latency -->
-        <div class="chart-card">
-          <div class="chart-card-head">
-            <div>
-              <p class="chart-title">Ingest latency</p>
-              <p class="chart-subtitle">mean / p50 / p95, milliseconds, lower is faster (n=50 per system)</p>
-            </div>
-            <div class="chart-legend">
-              <span class="legend-item"><i style="background:var(--series-orlog)"></i>orlog</span>
-              <span class="legend-item"><i style="background:var(--series-mem0)"></i>Mem0</span>
-            </div>
-          </div>
-          <div class="chart-body-wrap" id="chart-ingest"></div>
-          <p class="chart-caption">orlog's bars are real, not missing — they are
-            just tiny next to Mem0's. Mem0's extraction+update-decision LLM
-            call on every <code>add()</code> makes ingest its slow path,
-            mirroring orlog's query-time LLM call making reads its slow path.</p>
-          <button class="table-toggle" data-target="ingest" aria-pressed="false">View as table</button>
-          <div class="table-wrap" id="table-ingest" hidden></div>
-        </div>
-
-        <!-- Query latency -->
-        <div class="chart-card">
-          <div class="chart-card-head">
-            <div>
-              <p class="chart-title">Query latency</p>
-              <p class="chart-subtitle">p50, known vs. unknown-fact questions, milliseconds</p>
-            </div>
-            <div class="chart-legend">
-              <span class="legend-item"><i style="background:var(--series-orlog)"></i>orlog</span>
-              <span class="legend-item"><i style="background:var(--series-mem0)"></i>Mem0</span>
-            </div>
-          </div>
-          <div class="chart-body-wrap" id="chart-query"></div>
-          <p class="chart-caption">orlog's read path runs a derivation LLM call
-            and a verification (heimdall) pass per query; Mem0's read is a
-            vector-similarity lookup with no verification step — the
-            architectural source of the ~8x gap.</p>
-          <button class="table-toggle" data-target="query" aria-pressed="false">View as table</button>
-          <div class="table-wrap" id="table-query" hidden></div>
-        </div>
-
-        <!-- Accuracy -->
-        <div class="chart-card">
-          <div class="chart-card-head">
-            <div>
-              <p class="chart-title">Accuracy: overall vs. post-update</p>
-              <p class="chart-subtitle">share of questions answered correctly</p>
-            </div>
-            <div class="chart-legend">
-              <span class="legend-item"><i style="background:var(--series-orlog)"></i>orlog</span>
-              <span class="legend-item"><i style="background:var(--series-mem0)"></i>Mem0</span>
-            </div>
-          </div>
-          <div class="chart-body-wrap" id="chart-accuracy"></div>
-          <p class="chart-caption">The overall bars (n=40) look close. The
-            post-update bars (n=10 — a small slice, worth reading with that
-            in mind) show what the overall score hides: Mem0's stored memory
-            never reflected the update in this benchmark's shared-bucket
-            setup.</p>
-          <button class="table-toggle" data-target="accuracy" aria-pressed="false">View as table</button>
-          <div class="table-wrap" id="table-accuracy" hidden></div>
-        </div>
-
-        <!-- Abstention -->
-        <div class="chart-card">
-          <div class="chart-card-head">
-            <div>
-              <p class="chart-title">Correct abstention on unanswerable questions</p>
-              <p class="chart-subtitle">15 questions per system about attributes never stored for that entity</p>
-            </div>
-            <div class="chart-legend">
-              <span class="legend-item"><i style="background:var(--series-orlog)"></i>orlog</span>
-              <span class="legend-item"><i style="background:var(--series-mem0)"></i>Mem0</span>
-            </div>
-          </div>
-          <div class="chart-body-wrap" id="chart-abstention"></div>
-          <p class="chart-caption">False-positive rate is the mirror of this
-            bar (100% − correct-abstention-rate): 53.3% for orlog, 100% for
-            Mem0. Mem0 has no built-in verified/abstained concept, so it is
-            structurally unable to score here — this metric exists to make
-            that gap visible, not to penalize a feature Mem0 never claimed to have.</p>
-          <button class="table-toggle" data-target="abstention" aria-pressed="false">View as table</button>
-          <div class="table-wrap" id="table-abstention" hidden></div>
-        </div>
-
-        <!-- Tokens -->
-        <div class="chart-card full">
-          <div class="chart-card-head">
-            <div>
-              <p class="chart-title">Token usage per graded call</p>
-              <p class="chart-subtitle">orlog only — see note</p>
-            </div>
-          </div>
-          <div class="token-grid">
-            <div class="stat-tile">
-              <p class="stat-label"><i></i>orlog</p>
-              <p class="stat-value">189.5<span class="unit">tokens / call</span></p>
-              <p class="stat-sub">10,423 tokens total across 55 graded query calls</p>
-            </div>
-            <div class="empty-state">
-              <p class="stat-label"><i></i>Mem0</p>
-              <p class="empty-value">Not reported</p>
-              <p class="empty-detail">Mem0's Python client does not surface
-                token counts from <code>add()</code>/<code>search()</code> in
-                this benchmark, so there is no comparable figure — this is
-                omitted data, not a measured zero.</p>
-            </div>
-          </div>
-        </div>
-
-      </div>
-    </section>
-
-    <section aria-label="Methodology" class="methodology-section">
-      <h2>Methodology</h2>
-      <div class="methodology">
-        <h3>What was run</h3>
-        <p>Both systems ingest the same 40 natural-language facts about 10
-          synthetic entities (plus 10 follow-up facts that update earlier
-          ones), then answer the same 55 questions (40 about known facts, 15
-          about attributes never stored for that entity). Grading is a
-          deterministic, case-insensitive substring match — not an LLM judge.
-          All entities share one orlog event log and one Mem0 user bucket;
-          neither system is told which entity a question is about.</p>
-
-        <h3>Metrics shown here</h3>
-        <ul>
-          <li><strong>Ingest / query latency</strong> — wall-clock per call, from 50 ingests and 55 queries (40 known + 15 unknown) per system.</li>
-          <li><strong>Accuracy</strong> — overall (all 40 known-fact questions) and post-update-only (the 10 whose answer changed after a later update).</li>
-          <li><strong>Abstention</strong> — on the 15 unknown-fact questions, orlog counts <code>NO_CANDIDATES</code>/other abstention as correct; Mem0 counts "nothing cleared its default similarity threshold" as correct.</li>
-          <li><strong>Tokens</strong> — orlog's LLM call token counts; Mem0's client does not expose these, so it is shown as unavailable rather than zero.</li>
-        </ul>
-
-        <h3>Models</h3>
-        <p>orlog runs on Anthropic's <code>claude-haiku-4-5</code> (its own
-          calibrated default); Mem0 runs on OpenAI's <code>gpt-4o-mini</code>.
-          This ended up cross-provider rather than same-model — see the note below.</p>
-
-        <div class="bugs-note">
-          <h3>Model note: two real orlog bugs found and fixed while building this</h3>
-          <p>The original plan ran both systems on the same OpenAI model for a
-            strict same-model comparison. Building this benchmark surfaced two
-            real, provider-independent problems, both fixed in <code>src/orlog/</code>
-            because they affect orlog generally, not just this benchmark:</p>
-          <ul>
-            <li><strong>gpt-5-mini incompatibility.</strong> It rejects any non-default
-              <code>temperature</code> and the legacy <code>max_tokens</code> parameter,
-              which both orlog's and Mem0's default extraction calls used — both runners
-              were switched to <code>gpt-4o-mini</code>.</li>
-            <li><strong>orlog's real-LLM derivation path failed on nearly every query, on
-              every model tested, on both providers</strong> — including orlog's own README
-              example. Root cause: the deriver received only a fact's bare stored value with
-              no attribute label or grounding text, and the system prompt never told the model
-              to restate the literal <code>entity.attribute</code> key that heimdall's SUPPORTS
-              check requires. Fixed with two small, additive changes (an <code>excerpt</code>
-              field already anticipated by the design spec, and a system-prompt instruction) —
-              orlog's full test suite (283 tests) passes unchanged.</li>
-          </ul>
-          <p>With both fixed, orlog ran on Anthropic (the provider that was
-            actually available once this was diagnosed) rather than OpenAI for
-            this final run. Full details, including why this is believed to be
-            a genuine bug fix rather than a benchmark-side workaround, are in
-            <code>benchmarks/vs_mem0/README.md</code>'s "Model note" and
-            <code>docs/superpowers/specs/2026-07-17-vs-mem0-benchmark-design.md</code>'s
-            "Known deviations" section.</p>
-        </div>
-      </div>
-    </section>
-
-    <footer class="page-footer">
-      Rerun with <code>python -m benchmarks.vs_mem0</code> (requires
-      <code>ANTHROPIC_API_KEY</code> and <code>OPENAI_API_KEY</code>). This
-      page reads its numbers from the committed <code>results.json</code> at
-      build time — republishing it does not re-run the benchmark.
-    </footer>
+  <div class="stat-row">
+    <div class="stat">
+      <p class="label">Overall accuracy</p>
+      <div class="pair"><span class="num orlog">72.5%</span><span class="vs">vs</span><span class="num mem0">75.0%</span></div>
+      <p class="note">A near-tie that hides everything below.</p>
+    </div>
+    <div class="stat">
+      <p class="label">Accuracy on updated facts</p>
+      <div class="pair"><span class="num orlog">90%</span><span class="vs">vs</span><span class="num mem0">0%</span></div>
+      <p class="note">Mem0 never reflected an update, in this setup.</p>
+    </div>
+    <div class="stat">
+      <p class="label">Correct "I don't know"</p>
+      <div class="pair"><span class="num orlog">46.7%</span><span class="vs">vs</span><span class="num mem0">0%</span></div>
+      <p class="note">Mem0 always answers — right or wrong.</p>
+    </div>
+    <div class="stat">
+      <p class="label">Query latency (p50)</p>
+      <div class="pair"><span class="num orlog">1,712</span><span class="vs">vs</span><span class="num mem0">203</span></div>
+      <p class="note">Milliseconds. orlog verifies every read.</p>
+    </div>
   </div>
+
+  <section aria-label="Charts">
+    <div class="card-head" style="margin-bottom:16px;">
+      <h2 style="margin:0;">The numbers</h2>
+      <div class="legend">
+        <span class="item"><i class="orlog"></i>orlog</span>
+        <span class="item"><i class="mem0"></i>Mem0</span>
+      </div>
+    </div>
+    <div class="chart-grid">
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <p class="card-title">Ingest latency</p>
+            <p class="card-sub">mean / p50 / p95, ms — lower is faster (n=50)</p>
+          </div>
+        </div>
+        <div class="chart-body" id="chart-ingest"></div>
+        <p class="caption">Mem0 pays its LLM cost at write time (extraction + update-decision); orlog's writes are a plain log append.</p>
+        <button class="table-toggle" data-target="ingest" aria-pressed="false">View as table</button>
+        <div class="table-wrap" id="table-ingest" hidden></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <p class="card-title">Query latency</p>
+            <p class="card-sub">p50, known vs. unknown facts, ms</p>
+          </div>
+        </div>
+        <div class="chart-body" id="chart-query"></div>
+        <p class="caption">orlog pays its LLM cost here instead — a derivation call plus verification on every read. Mem0's read is a plain vector lookup.</p>
+        <button class="table-toggle" data-target="query" aria-pressed="false">View as table</button>
+        <div class="table-wrap" id="table-query" hidden></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <p class="card-title">Accuracy: overall vs. post-update</p>
+            <p class="card-sub">share of questions answered correctly</p>
+          </div>
+        </div>
+        <div class="chart-body" id="chart-accuracy"></div>
+        <p class="caption">Same 40-question overall score, split out to the 10 whose answer changed after a later update (small n — read with that in mind).</p>
+        <button class="table-toggle" data-target="accuracy" aria-pressed="false">View as table</button>
+        <div class="table-wrap" id="table-accuracy" hidden></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <p class="card-title">Abstention on unanswerable questions</p>
+            <p class="card-sub">15 questions per system, never-stored attributes</p>
+          </div>
+        </div>
+        <div class="chart-body" id="chart-abstention"></div>
+        <p class="caption">Mem0 has no abstain concept, so its false-positive rate is structurally 100% here — not a penalty for a feature it never claimed.</p>
+        <button class="table-toggle" data-target="abstention" aria-pressed="false">View as table</button>
+        <div class="table-wrap" id="table-abstention" hidden></div>
+      </div>
+
+    </div>
+    <p class="caption" style="margin-top:16px;">
+      Token usage: orlog averages 190 tokens/query (10,423 total across 55
+      calls). Mem0's client doesn't expose token counts — omitted, not zero.
+    </p>
+  </section>
+
+  <section aria-label="Methodology">
+    <h2>Methodology</h2>
+    <div class="methodology">
+      <ul>
+        <li>Both systems ingest the same 40 facts about 10 synthetic entities (plus 10 later updates), then answer the same 55 questions (40 known, 15 about attributes never stored).</li>
+        <li>Grading is a deterministic, case-insensitive substring match — not an LLM judge.</li>
+        <li>All entities share one orlog event log and one Mem0 bucket; neither system is told which entity a question is about.</li>
+        <li>orlog runs Anthropic's <code>claude-haiku-4-5</code> (its own default); Mem0 runs OpenAI's <code>gpt-4o-mini</code> — cross-provider, not same-model. Full reasoning, dataset design, and two real orlog bugs found while building this: <code>benchmarks/vs_mem0/README.md</code>.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    Rerun with <code>python -m benchmarks.vs_mem0</code> (requires
+    <code>ANTHROPIC_API_KEY</code> and <code>OPENAI_API_KEY</code>). Reads
+    numbers from the committed <code>results.json</code> at build time —
+    republishing this page does not re-run the benchmark.
+  </footer>
 </div>
 
 <div id="tooltip" role="tooltip" hidden></div>
@@ -523,7 +393,7 @@
     var tickFmt = opts.tickFmt;
     var ariaLabel = opts.ariaLabel || "";
 
-    var barWidth = 22, seriesGap = 4, leftPad = 54, rightPad = 16, topPad = 26, bottomPad = 34, plotHeight = 220;
+    var barWidth = 22, seriesGap = 4, leftPad = 50, rightPad = 14, topPad = 20, bottomPad = 30, plotHeight = 180;
     var totalBarsWidth = series.length * barWidth + (series.length - 1) * seriesGap;
     var groupWidth = Math.max(totalBarsWidth + 46, 120);
     var plotWidth = groups.length * groupWidth;
@@ -597,21 +467,20 @@
         if (!it.isZero) {
           barsSvg +=
             '<g class="bar-g">' +
-            '<rect class="bar" x="' + bx + '" y="' + it.by + '" width="' + barWidth + '" height="' + it.bh + '" rx="4" ry="4" fill="var(--series-' + s.key + ')"></rect>' +
-            '<rect x="' + bx + '" y="' + (it.by + Math.max(it.bh - 4, 0)) + '" width="' + barWidth + '" height="' + Math.min(4, it.bh) + '" fill="var(--series-' + s.key + ')"></rect>' +
+            '<rect class="bar" x="' + bx + '" y="' + it.by + '" width="' + barWidth + '" height="' + it.bh + '" rx="3" ry="3" fill="var(--' + s.key + ')"></rect>' +
             '<rect class="hit" tabindex="0" role="img" aria-label="' + ariaText + '" data-tt="' + ariaText + '" x="' + (bx - 4) + '" y="' + topPad + '" width="' + (barWidth + 8) + '" height="' + plotHeight + '" fill="transparent"></rect>' +
             "</g>";
           labelsSvg += '<text class="bar-value" x="' + it.labelX + '" y="' + it.labelY + '" text-anchor="middle">' + label + "</text>";
         } else {
           barsSvg +=
             '<g class="bar-g">' +
-            '<circle class="zero-marker" cx="' + (bx + barWidth / 2) + '" cy="' + baseY + '" r="4" fill="var(--series-' + s.key + ')"></circle>' +
+            '<circle class="zero-marker" cx="' + (bx + barWidth / 2) + '" cy="' + baseY + '" r="4" fill="var(--' + s.key + ')"></circle>' +
             '<rect class="hit" tabindex="0" role="img" aria-label="' + ariaText + '" data-tt="' + ariaText + '" x="' + (bx - 4) + '" y="' + topPad + '" width="' + (barWidth + 8) + '" height="' + plotHeight + '" fill="transparent"></rect>' +
             "</g>";
           labelsSvg += '<text class="bar-value zero" x="' + it.labelX + '" y="' + it.labelY + '" text-anchor="middle">' + label + "</text>";
         }
       });
-      xLabelsSvg += '<text class="axis-cat" x="' + (gx + groupWidth / 2) + '" y="' + (baseY + 22) + '" text-anchor="middle">' + escapeText(g.label) + "</text>";
+      xLabelsSvg += '<text class="axis-cat" x="' + (gx + groupWidth / 2) + '" y="' + (baseY + 20) + '" text-anchor="middle">' + escapeText(g.label) + "</text>";
     });
 
     var svg =
@@ -624,7 +493,7 @@
 
   function tableHTML(headers, rows) {
     var h = '<table class="data-table"><thead><tr>';
-    headers.forEach(function (hd, i) {
+    headers.forEach(function (hd) {
       h += '<th scope="col">' + escapeText(hd) + "</th>";
     });
     h += "</tr></thead><tbody>";
@@ -734,25 +603,34 @@
   })();
 
   // ---------------------------------------------------------------------
-  // Chart 4: Abstention (correct rate on unknown questions)
+  // Chart 4: Abstention — correct-abstention rate AND its mirror,
+  // false-positive rate, as two groups (rather than one lone bar) so the
+  // relationship between them is visible in the chart itself.
   // ---------------------------------------------------------------------
   (function () {
-    var groups = [{ key: "abstention", label: "Correct abstention rate" }];
+    var groups = [
+      { key: "correct", label: "Correct abstention" },
+      { key: "false_positive", label: "False positive" }
+    ];
+    function get(gKey, sKey) {
+      var rate = DATA[sKey].abstention.correct_rate;
+      return gKey === "correct" ? rate : 1 - rate;
+    }
     var svg = buildGroupedBarChart({
       groups: groups,
       series: SERIES,
-      getValue: function (gKey, sKey) { return DATA[sKey].abstention.correct_rate; },
+      getValue: get,
       valueFmt: fmtPct,
       tickFmt: fmtPctTick,
       hardCapTop: 1,
-      ariaLabel: "Correct abstention rate on unanswerable questions, orlog vs Mem0"
+      ariaLabel: "Correct abstention rate and false-positive rate on unanswerable questions, orlog vs Mem0"
     });
     document.getElementById("chart-abstention").innerHTML = svg;
     document.getElementById("table-abstention").innerHTML = tableHTML(
       ["Metric", "orlog", "Mem0"],
       [
         ["Correct abstention rate (n=15)", fmtPct(DATA.orlog.abstention.correct_rate), fmtPct(DATA.mem0.abstention.correct_rate)],
-        ["Implied false-positive rate", fmtPct(1 - DATA.orlog.abstention.correct_rate), fmtPct(1 - DATA.mem0.abstention.correct_rate)]
+        ["False-positive rate", fmtPct(1 - DATA.orlog.abstention.correct_rate), fmtPct(1 - DATA.mem0.abstention.correct_rate)]
       ]
     );
   })();
@@ -791,7 +669,7 @@
     var parts = text.split(", ");
     var seriesName = parts[0];
     var rest = parts.slice(1).join(", ");
-    var colorVar = /orlog/i.test(seriesName) ? "var(--series-orlog)" : "var(--series-mem0)";
+    var colorVar = /orlog/i.test(seriesName) ? "var(--orlog)" : "var(--mem0)";
     tooltip.innerHTML =
       '<div class="tt-series"><i style="background:' + colorVar + '"></i>' + escapeText(seriesName) + "</div>" +
       '<div class="tt-value">' + escapeText(rest) + "</div>";
