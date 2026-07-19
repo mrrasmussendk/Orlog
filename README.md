@@ -167,22 +167,31 @@ orlog conformance               # run tests/conformance/ against this install
 
 ## Known deviations from ORLOG-SPEC.md v1.0
 
-- `pipeline.py` is 266 lines, over this project's own ~200-line-per-file
+- `pipeline.py` is 426 lines, well over this project's own ~200-line-per-file
   guideline — it's the central orchestrator wiring every layer together
   plus the optional stats hooks, and splitting it felt riskier than leaving
   it, but it's a candidate for a future cleanup pass.
 - `FastEmbedEmbedder` (the spec-default embedder, `BAAI/bge-small-en-v1.5`)
-  is never exercised by the test suite — constructing it downloads a model
-  over the network, which automated tests deliberately avoid. Every test
-  that builds a `Runtime` pins `config.retrieval.embedder = "hashing"`
-  explicitly instead of relying on `OrlogConfig`'s default, which does
-  match spec. `HashingEmbedder` (deterministic, offline) is what
-  `retrieval_hybrid.py`'s and `server_tools.py`'s tests actually run
-  against, with `min_confidence`/`ambiguity_margin` relaxed back to the
-  values calibrated for it (see `RetrievalConfig`'s docstring).
-- The workspace lock (`workspace.py`) is a plain "does the lock file exist"
-  check, not a real OS-level advisory lock — enough to stop a second `orlog
-  serve` on the same machine, not a distributed locking primitive.
+  is now exercised directly by `tests/test_retrieval_hybrid.py`'s
+  `resolve_key()` regression tests (three cases, added alongside the
+  retrieval-bug fix documented in `benchmarks/vs_mem0/README.md`) — no
+  skip marker, and they pass under a plain `pytest` invocation. What's
+  still true: no test builds a full `Runtime` with the default embedder
+  and uses it live end-to-end. Every test that builds a `Runtime` still
+  pins `config.retrieval.embedder = "hashing"` explicitly (or, in
+  `test_runtime.py`'s timeout test, monkeypatches the build to hang and
+  never actually constructs one) rather than relying on `OrlogConfig`'s
+  default, since a cold fastembed build is network-bound.
+  `min_confidence`/`ambiguity_margin` for those tests are relaxed back to
+  the values calibrated for `HashingEmbedder` (see `RetrievalConfig`'s
+  docstring).
+- The workspace lock (`workspace.py`) writes its own pid and checks
+  whether a held lock's recorded pid is still alive (`_pid_alive()`,
+  cross-platform) before honoring it — a stale lock from a crashed or
+  killed process is reclaimed automatically rather than blocking forever.
+  It is still not a real OS-level advisory lock (no flock/fcntl) and not a
+  distributed primitive — enough to stop a second `orlog serve` on the
+  same machine, not across machines.
 - `orlog conformance --target self` only supports `self` (shells out to this
   install's own `tests/conformance/`); a remote `--target=<endpoint>` mode
   isn't built, since spec's MCP transport is stdio-only in v1.0.

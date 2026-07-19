@@ -37,10 +37,12 @@ def vault_key(monkeypatch):
 def runtime(tmp_path):
     # Pinned to "hashing" rather than relying on OrlogConfig's default: the
     # real default (spec §B3's fastembed/bge-small) is network-bound on a
-    # cold build, which this test suite deliberately never exercises (see
-    # README's "Known deviations"). min_confidence/ambiguity_margin are
-    # relaxed back to the values calibrated for "hashing" (config.py's own
-    # docstring) -- the global defaults are now calibrated for bge-small.
+    # cold build, which this Runtime-level test suite avoids (see README's
+    # "Known deviations" -- test_retrieval_hybrid.py does exercise the real
+    # FastEmbedEmbedder directly, just not through a full Runtime).
+    # min_confidence/ambiguity_margin are relaxed back to the values
+    # calibrated for "hashing" (config.py's own docstring) -- the global
+    # defaults are now calibrated for bge-small.
     config = OrlogConfig(
         workspace=WorkspaceConfig(name="myproject"),
         retrieval=RetrievalConfig(embedder="hashing", min_confidence=0.15, ambiguity_margin=0.85),
