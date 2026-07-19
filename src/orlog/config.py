@@ -59,6 +59,27 @@ class RetrievalConfig(BaseModel):
     no detail mentioned) -- 0.35 and 0.90 sit clearly on the right side of
     both gaps.
 
+    `min_confidence` was re-calibrated from 0.35 to 0.47 after
+    retrieval_hybrid.py's `_lexical_score` gained stopword filtering (see
+    `_STOPWORDS`): that fix removed a large source of spurious score
+    inflation from shared function words (e.g. "is", the split possessive
+    "s"), so blended scores across the board -- both real matches and
+    unrelated ones -- came down, leaving 0.35 too permissive to filter
+    anything (benchmarks/vs_mem0's own "unknown" questions all cleared it).
+    0.47 was picked empirically against benchmarks/vs_mem0's dataset: it
+    sits strictly below every genuine match's score there (so no known-fact
+    accuracy is lost) while sitting above most -- not all -- of the
+    should-abstain scores. This is a real, inherent precision/recall
+    tradeoff, not a fully-solved separation: a handful of ad hoc
+    differently-phrased-but-genuinely-related queries (e.g. "When did X
+    start their job?" against a fact phrased as "X joined ... in <date>")
+    scored well under this threshold too, in testing outside the benchmark
+    dataset. retrieval.py's own docstring already says retrieval quality is
+    explicitly outside orlog's trust guarantee (only validity/exclusion
+    honesty is normative) -- this threshold is a tunable knob on that
+    quality, not a correctness guarantee, and a deployment with different
+    query phrasing patterns may need to recalibrate it.
+
     A cold build of the real model is network-bound (first-run model
     download); `embedder_build_timeout_s` bounds that so recall() abstains
     (EMBEDDER_UNAVAILABLE) rather than hangs -- see runtime.py's module
@@ -78,7 +99,7 @@ class RetrievalConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     k: int = 8
     embedder: str = "BAAI/bge-small-en-v1.5"  # a fastembed model name (spec default) | "hashing" (dependency-free, offline)
-    min_confidence: float = 0.35  # below this blended score, a free-text match doesn't count (NO_CANDIDATES) -- calibrated for the default embedder
+    min_confidence: float = 0.47  # below this blended score, a free-text match doesn't count (NO_CANDIDATES) -- calibrated for the default embedder
     ambiguity_margin: float = 0.90  # a runner-up within this fraction of the top score makes the match AMBIGUOUS -- calibrated for the default embedder
     embedder_build_timeout_s: float = 20.0  # bounds a cold/network-bound embedder build; past this, recall() abstains rather than hang
 

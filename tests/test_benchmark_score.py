@@ -93,3 +93,38 @@ def test_main_handles_missing_file(tmp_path):
     assert combined["orlog"]["accuracy"]["overall"] is None
     assert combined["mem0"]["accuracy"]["overall"] is None
     assert out.exists()
+
+
+def test_aggregate_across_runs_reports_median_min_max():
+    run_a = score.compute_metrics("orlog", [
+        _record("ingest", latency_ms=10.0),
+        _record("query_known", returned_text="Momentum", expected_value="Momentum"),
+    ], set())
+    run_b = score.compute_metrics("orlog", [
+        _record("ingest", latency_ms=30.0),
+        _record("query_known", returned_text="wrong", expected_value="Momentum"),
+    ], set())
+    combined = score.aggregate_across_runs([run_a, run_b])
+    assert combined["system"] == "orlog"
+    assert combined["ingest"]["mean"] == {"median": 20.0, "min": 10.0, "max": 30.0, "n": 2}
+    assert combined["ingest"]["n"] == 1  # sample size carried over, not aggregated
+    assert combined["accuracy"]["overall"] == {"median": 0.5, "min": 0.0, "max": 1.0, "n": 2}
+    assert combined["accuracy"]["overall_n"] == 1
+
+
+def test_main_multi_combines_n_raw_files(tmp_path):
+    for i, latency in enumerate([10.0, 20.0, 30.0]):
+        path = tmp_path / f"orlog_run{i}.json"
+        path.write_text(json.dumps([_record("ingest", latency_ms=latency)]), encoding="utf-8")
+    mem0_path = tmp_path / "mem0_run0.json"
+    mem0_path.write_text(json.dumps([_record("ingest", latency_ms=5.0)]), encoding="utf-8")
+
+    out = tmp_path / "results.json"
+    combined = score.main_multi(
+        [tmp_path / f"orlog_run{i}.json" for i in range(3)],
+        [mem0_path, mem0_path, mem0_path],
+        out,
+    )
+    assert combined["n_runs"] == 3
+    assert combined["orlog"]["ingest"]["mean"] == {"median": 20.0, "min": 10.0, "max": 30.0, "n": 3}
+    assert out.exists()

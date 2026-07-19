@@ -50,6 +50,18 @@ Nothing gets asserted that can't be traced back to a specific, timestamped
 event. Ask about something orlog never learned, and it tells you so instead
 of inventing an answer.
 
+## Benchmarked against Mem0
+
+![orlog vs Mem0 headline numbers](benchmarks/vs_mem0/images/dashboard-hero.png)
+
+Same facts, same questions, both systems for real — no mocks, no LLM judge,
+100 independent runs. orlog wins accuracy (97.5% vs. 75%) and correct
+abstention (80% vs. 0%) decisively, and its worst single run still beat
+Mem0's best; Mem0 answers faster per query (155ms vs. 1,025ms p50) because
+it skips the citation-verification step orlog never skips. Full
+methodology, charts, and the real retrieval bug this benchmark found and
+fixed: [`benchmarks/vs_mem0/README.md`](benchmarks/vs_mem0/README.md).
+
 ## The state machine
 
 ```

@@ -79,6 +79,48 @@ def main(orlog_path: Path, mem0_path: Path, out_path: Path) -> dict:
     return combined
 
 
+def aggregate_across_runs(per_run_metrics: list[dict]) -> dict:
+    """Combines N compute_metrics() dicts -- one per independent benchmark
+    run against the same dataset -- into median/min/max per numeric leaf, so
+    latency and accuracy figures show their run-to-run spread instead of a
+    single-sample point estimate. The system name and sample-size fields
+    (`n`, `errors`, and any `*_n`-suffixed key) are carried over from the
+    first run unchanged, since they're constant across runs on the same
+    dataset -- only the measured quantities (means, percentiles, rates,
+    totals) vary and get a {median, min, max, n} spread instead.
+    """
+    first = per_run_metrics[0]
+    result = {}
+    for key, value in first.items():
+        if isinstance(value, dict):
+            result[key] = aggregate_across_runs([m[key] for m in per_run_metrics])
+        elif isinstance(value, str) or key in ("n", "errors", "n_with_tokens") or key.endswith("_n"):
+            result[key] = value
+        else:
+            result[key] = grading.summarize_runs([m[key] for m in per_run_metrics])
+    return result
+
+
+def main_multi(orlog_paths: list[Path], mem0_paths: list[Path], out_path: Path) -> dict:
+    """Same combination as main(), but over N independent full runs -- each
+    (orlog_path, mem0_path) pair is one run's raw results. Reports
+    median/min/max per metric across the N runs rather than one point
+    estimate. See aggregate_across_runs.
+    """
+    from benchmarks.vs_mem0.dataset import updated_pairs as get_updated_pairs
+
+    pairs = get_updated_pairs()
+    orlog_runs = [compute_metrics("orlog", load_raw_results(p), pairs) for p in orlog_paths]
+    mem0_runs = [compute_metrics("mem0", load_raw_results(p), pairs) for p in mem0_paths]
+    combined = {
+        "n_runs": len(orlog_paths),
+        "orlog": aggregate_across_runs(orlog_runs),
+        "mem0": aggregate_across_runs(mem0_runs),
+    }
+    Path(out_path).write_text(json.dumps(combined, indent=2), encoding="utf-8")
+    return combined
+
+
 if __name__ == "__main__":
     base = Path(__file__).parent
     main(base / "orlog_results.json", base / "mem0_results.json", base / "results.json")

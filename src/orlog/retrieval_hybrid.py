@@ -43,9 +43,58 @@ from orlog.verdandi import SupersessionChainsView
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
+# Excluded from _lexical_score's Jaccard overlap: high-frequency English
+# function words (articles, copulas, auxiliary verbs, question words,
+# personal pronouns) plus "s", the bare fragment _TOKEN_RE always splits a
+# possessive into ("bilal's" -> "bilal", "s"). Left uncounted, these
+# dominate the Jaccard score of any short sentence -- e.g. "What IS
+# {name}'S job title?" shares "is"/"s" with an unrelated "{name}'S native
+# language IS {x}" fact far more than it shares real content words with the
+# fact it's actually asking about, letting two coincidental function-word
+# matches outrank a stronger semantic (cosine) match.
+#
+# Deliberately NOT included: "in". Despite being a preposition, it carries
+# real topical signal here -- "lives IN {city}" / "does {name} live IN?"
+# co-occur specifically around location facts, unlike a purely coincidental
+# function-word match. Stripping it (an earlier version of this set did)
+# erased the one token a city question shares with its own city fact,
+# leaving it tied with an unrelated native_language fact on the entity name
+# alone -- which pushed that native_language candidate's score close enough
+# to trigger a false AMBIGUOUS abstain via recall_tool's ambiguity_margin
+# check. Every OTHER preposition here ("as", "of", "on", ...) was checked
+# the same way and found to carry no comparable signal -- "as" in
+# particular actively hurts: "{name} works AS A {job title}" needs it
+# excluded the same way "is"/"s" do, or it dilutes that fact's own token
+# set enough to lose to an unrelated native_language fact on some entities.
+#
+# Two more "principled-looking" alternatives to this hand-picked list were
+# tried and measured worse on the same benchmark (see
+# benchmarks/vs_mem0/README.md's "Retrieval bug found and fixed" for the
+# full numbers): (1) lowering the lexical/cosine blend weight instead of
+# curating stopwords -- worse, because it discards genuine lexical signal
+# (e.g. real word overlap on "plan" facts) along with the noise, not just
+# the noise; (2) corpus-driven IDF weighting -- worse, because "in" and
+# "as" turned out to have identical document frequency in the test corpus
+# despite one carrying real signal and the other none, so raw frequency
+# alone can't tell them apart; (3) weighting tokens by length instead of a
+# curated list (no domain knowledge required) -- didn't reintroduce wrong
+# answers, but was measurably less discriminating overall (lower known-fact
+# accuracy) than this hand-picked list, which was chosen deliberately after
+# comparing all four. See retrieval_hybrid tests for the concrete cases
+# this was found from.
+_STOPWORDS = frozenset({
+    "a", "an", "the", "s",
+    "is", "are", "was", "were", "be", "been", "being", "do", "does", "did", "doing", "has", "have", "had", "having",
+    "to", "as", "of", "on", "at", "for", "with", "by", "from", "about",
+    "and", "or", "but", "not", "no",
+    "i", "you", "he", "she", "we", "they", "them", "his", "her", "their", "our", "your", "its", "it",
+    "this", "that", "these", "those",
+    "what", "which", "who", "whom", "whose", "where", "when", "how",
+})
+
 
 def _tokenize(text: str) -> set[str]:
-    return set(_TOKEN_RE.findall(text.lower()))
+    return {t for t in _TOKEN_RE.findall(text.lower()) if t not in _STOPWORDS}
 
 
 def _lexical_score(query_tokens: set[str], content: str) -> float:
@@ -222,7 +271,20 @@ def resolve_key(
     remembered `text` (falling back to `value` if text is somehow absent) --
     the original natural-language sentence carries far more of the semantic
     signal a natural-language query matches against than the terse
-    extracted value alone.
+    extracted value alone -- PLUS the chain's own `attribute` name
+    (`"job_title"` -> `"job title"`), appended for scoring only. Unlike
+    everything in _STOPWORDS, this isn't phrasing tuned to any particular
+    dataset: `attribute` is caller-supplied schema metadata (required at
+    write time, see Runtime.remember()), not derived from the free-text
+    query at all, so folding it into the match is closer to a search
+    engine boosting on a field name than to guessing at word choice. It
+    resolved every remaining case a benchmark run found ambiguous between
+    two facts about the same entity (e.g. "job_title" vs "native_language"
+    both mentioning the entity's name) once the query and the fact's own
+    attribute name shared a literal word ("job title") that two attribute
+    values alone never would. `matched_text` returned below is still the
+    original, unaugmented text -- the attribute name is scoring-only, never
+    shown as if it were remembered evidence.
 
     Results are grouped by key (one best-scoring KeyCandidate per key, not
     per event), ranked descending, deterministic tie-break by the key
@@ -237,16 +299,17 @@ def resolve_key(
         for event_id in event_ids:
             payload = events_by_id[event_id].payload
             content = str(payload.get("text") or payload.get("value") or "")
-            entries.append((entity, attribute, event_id, content, payload))
+            searchable = f"{content} {attribute.replace('_', ' ')}"
+            entries.append((entity, attribute, event_id, content, searchable, payload))
 
     if not entries:
         return []
 
-    content_vecs = embedder.embed([entry[3] for entry in entries])
+    searchable_vecs = embedder.embed([entry[4] for entry in entries])
 
     best_by_key: dict[str, KeyCandidate] = {}
-    for (entity, attribute, event_id, content, payload), content_vec in zip(entries, content_vecs):
-        score = 0.5 * _lexical_score(query_tokens, content) + 0.5 * _cosine(query_vec, content_vec)
+    for (entity, attribute, event_id, content, searchable, payload), searchable_vec in zip(entries, searchable_vecs):
+        score = 0.5 * _lexical_score(query_tokens, searchable) + 0.5 * _cosine(query_vec, searchable_vec)
         key = f"{entity}::{attribute}"
         current = best_by_key.get(key)
         if current is None or score > current.score:

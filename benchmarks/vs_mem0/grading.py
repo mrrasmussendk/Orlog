@@ -32,3 +32,19 @@ def percentiles(values_ms: list[float]) -> dict:
         "p95": _rank(95),
         "n": n,
     }
+
+
+def summarize_runs(values: list[float | None]) -> dict:
+    """Median/min/max across N per-run point estimates of the same metric
+    (e.g. N runs' query-latency means, or N runs' accuracy rates). None
+    values (metric unavailable that run) are dropped before aggregating.
+    Empty/all-None input -> all None, n=0.
+    """
+    present = [v for v in values if v is not None]
+    if not present:
+        return {"median": None, "min": None, "max": None, "n": 0}
+    ordered = sorted(present)
+    n = len(ordered)
+    mid = n // 2
+    median = ordered[mid] if n % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+    return {"median": median, "min": ordered[0], "max": ordered[-1], "n": n}

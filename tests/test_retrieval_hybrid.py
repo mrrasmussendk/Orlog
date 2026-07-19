@@ -138,7 +138,7 @@ def test_resolve_key_finds_the_right_key_from_its_own_remembered_text(tmp_path, 
         ],
     )
 
-    results = resolve_key("where does anna live now", view, events_by_id, HashingEmbedder())
+    results = resolve_key("when did anna move to seattle", view, events_by_id, HashingEmbedder())
 
     assert results[0].entity == "anna"
     assert results[0].attribute == "city"
@@ -225,6 +225,107 @@ def test_default_fastembed_cache_dir_is_not_under_the_system_temp_folder():
     system_temp = Path(tempfile.gettempdir()).resolve()
     assert system_temp not in cache_dir.resolve().parents
     assert cache_dir.resolve() != system_temp
+
+
+def test_lexical_score_ignores_stopwords_and_the_split_possessive_s(tmp_path, make_event):
+    # Regression: "What IS Bilal'S job title?" used to Jaccard-match "IS"
+    # and the possessive's split-off "S" fragment against an unrelated
+    # "Bilal'S native language IS Arabic" fact, outscoring the actual
+    # job_title fact ("Bilal works as a Product Designer") on pure function-
+    # word overlap despite the real content words having nothing in common.
+    # See retrieval_hybrid.py's _STOPWORDS docstring for the full mechanism
+    # and the alternatives that were tried and measured worse.
+    from orlog.retrieval_hybrid import _lexical_score, _tokenize
+
+    question_tokens = _tokenize("What is Bilal's job title?")
+    job_title_stmt = "Bilal works as a Product Designer."
+    native_language_stmt = "Bilal's native language is Arabic."
+
+    assert "is" not in question_tokens
+    assert "s" not in question_tokens
+    assert _lexical_score(question_tokens, job_title_stmt) == _lexical_score(question_tokens, native_language_stmt)
+
+
+def test_resolve_key_keeps_in_as_a_real_signal_for_location_facts(tmp_path, make_event):
+    # Regression: an earlier version of this fix also stripped "in" as a
+    # blanket preposition. That erased the one token "What city does X live
+    # in?" shares with "X lives in {city}." (both sides lose it), leaving
+    # city tied with an unrelated native_language fact on the entity name
+    # alone and pushing native_language's score close enough to trigger a
+    # false AMBIGUOUS abstain. "in" carries real topical signal for
+    # location facts and must stay countable.
+    from orlog.retrieval_hybrid import FastEmbedEmbedder
+
+    view, events_by_id = _build(
+        tmp_path, make_event,
+        [
+            {"entity": "user:farah", "attribute": "city", "value": "Sofia",
+             "text": "Farah lives in Sofia."},
+            {"entity": "user:farah", "attribute": "native_language", "value": "Persian",
+             "text": "Farah's native language is Persian."},
+        ],
+    )
+
+    results = resolve_key("What city does Farah live in?", view, events_by_id, FastEmbedEmbedder())
+
+    assert results[0].attribute == "city"
+    # Not just correct on top-1: the runner-up must be a clear miss, not a
+    # near-tie, or recall_tool's ambiguity_margin check would abstain anyway.
+    assert results[1].score < results[0].score * 0.90
+
+
+def test_resolve_key_scores_the_chains_own_attribute_name_not_just_its_text(tmp_path, make_event):
+    # Even with the stopword fix above, several job_title-vs-native_language
+    # pairs stayed close enough (within recall_tool's 90% ambiguity_margin)
+    # to trigger a false AMBIGUOUS abstain on a real benchmark run, because
+    # neither fact's own text shares any real content word with a
+    # differently-worded question ("job title" vs "works as a ..."). The
+    # chain's own `attribute` name is caller-supplied schema metadata (see
+    # Runtime.remember()), not phrasing derived from the query -- folding it
+    # into what's searched (scoring only, never shown as matched_text) gives
+    # a literal word match a benchmark run found this pair could never win
+    # on text alone.
+    from orlog.retrieval_hybrid import FastEmbedEmbedder
+
+    view, events_by_id = _build(
+        tmp_path, make_event,
+        [
+            {"entity": "user:bilal", "attribute": "job_title", "value": "Product Designer",
+             "text": "Bilal works as a Product Designer."},
+            {"entity": "user:bilal", "attribute": "native_language", "value": "Arabic",
+             "text": "Bilal's native language is Arabic."},
+        ],
+    )
+
+    results = resolve_key("What is Bilal's job title?", view, events_by_id, FastEmbedEmbedder())
+
+    assert results[0].attribute == "job_title"
+    assert results[1].score < results[0].score * 0.90
+    # matched_text stays the original remembered text -- the attribute name
+    # is a scoring signal only, never presented as if it were evidence.
+    assert results[0].matched_text == "Bilal works as a Product Designer."
+
+
+def test_resolve_key_is_not_fooled_by_a_shared_copula_and_possessive(tmp_path, make_event):
+    # End-to-end regression for the same bug, through resolve_key() with a
+    # real semantic embedder: a fact with genuine content overlap must win
+    # over one that only shares function words, even when both mention the
+    # same entity.
+    from orlog.retrieval_hybrid import FastEmbedEmbedder
+
+    view, events_by_id = _build(
+        tmp_path, make_event,
+        [
+            {"entity": "user:bilal", "attribute": "job_title", "value": "Product Designer",
+             "text": "Bilal works as a Product Designer."},
+            {"entity": "user:bilal", "attribute": "native_language", "value": "Arabic",
+             "text": "Bilal's native language is Arabic."},
+        ],
+    )
+
+    results = resolve_key("What is Bilal's job title?", view, events_by_id, FastEmbedEmbedder())
+
+    assert results[0].attribute == "job_title"
 
 
 def test_resolve_key_surfaces_entity_label_and_detail_when_present(tmp_path, make_event):

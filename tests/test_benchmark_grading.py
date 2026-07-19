@@ -26,3 +26,21 @@ def test_percentiles_known_values():
 
 def test_percentiles_single_value():
     assert grading.percentiles([42.0]) == {"mean": 42.0, "p50": 42.0, "p95": 42.0, "n": 1}
+
+
+def test_summarize_runs_empty():
+    assert grading.summarize_runs([]) == {"median": None, "min": None, "max": None, "n": 0}
+
+
+def test_summarize_runs_drops_none():
+    assert grading.summarize_runs([10.0, None, 30.0]) == {"median": 20.0, "min": 10.0, "max": 30.0, "n": 2}
+
+
+def test_summarize_runs_odd_count_median():
+    result = grading.summarize_runs([30.0, 10.0, 20.0])
+    assert result == {"median": 20.0, "min": 10.0, "max": 30.0, "n": 3}
+
+
+def test_summarize_runs_even_count_median_averages_middle_two():
+    result = grading.summarize_runs([10.0, 20.0, 30.0, 40.0])
+    assert result == {"median": 25.0, "min": 10.0, "max": 40.0, "n": 4}

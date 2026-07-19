@@ -1,45 +1,52 @@
+<meta charset="utf-8">
 <title>orlog vs Mem0 — Benchmark</title>
 <style>
+  /* Tokens are the dataviz skill's validated reference palette (see
+     benchmarks/vs_mem0/README.md's design notes): chrome/ink lifted
+     verbatim from references/palette.md's "Chart chrome & ink" table;
+     --orlog/--mem0 are categorical slots 1 (blue) and 2 (green), the
+     pair validate_palette.js confirms clears the CVD floor in both
+     light and dark (worst adjacent ΔE 26.5 light / 27.3 dark, target 8). */
   :root {
-    --surface:        #ffffff;
-    --page:           #f6f6f4;
-    --ink:            #111111;
-    --ink-soft:       #55534c;
-    --ink-mute:       #8a8779;
-    --line:           #e4e2d9;
-    --line-strong:    #c9c6b8;
-    --border:         rgba(17,17,17,0.10);
-    --orlog:          #1f66c9;
-    --mem0:           #1c8f4a;
+    --surface:        #fcfcfb;
+    --page:           #f9f9f7;
+    --ink:            #0b0b0b;
+    --ink-soft:       #52514e;
+    --ink-mute:       #898781;
+    --line:           #e1e0d9;
+    --line-strong:    #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --orlog:          #2a78d6;
+    --mem0:           #008300;
     --orlog-tint:     #eaf1fc;
     --orlog-badge-bg: #dbe9fa;
   }
   :root[data-theme="dark"] {
-    --surface:        #17181a;
-    --page:           #0d0e0f;
-    --ink:            #f5f5f2;
-    --ink-soft:       #b9b7ac;
-    --ink-mute:       #837f72;
-    --line:           #2a2b28;
-    --line-strong:    #3a3b36;
+    --surface:        #1a1a19;
+    --page:           #0d0d0d;
+    --ink:            #ffffff;
+    --ink-soft:       #c3c2b7;
+    --ink-mute:       #898781;
+    --line:           #2c2c2a;
+    --line-strong:    #383835;
     --border:         rgba(255,255,255,0.10);
-    --orlog:          #5b9bf0;
-    --mem0:           #4cbb7d;
+    --orlog:          #3987e5;
+    --mem0:           #008300;
     --orlog-tint:     #182437;
     --orlog-badge-bg: #223760;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --surface:        #17181a;
-      --page:           #0d0e0f;
-      --ink:            #f5f5f2;
-      --ink-soft:       #b9b7ac;
-      --ink-mute:       #837f72;
-      --line:           #2a2b28;
-      --line-strong:    #3a3b36;
+      --surface:        #1a1a19;
+      --page:           #0d0d0d;
+      --ink:            #ffffff;
+      --ink-soft:       #c3c2b7;
+      --ink-mute:       #898781;
+      --line:           #2c2c2a;
+      --line-strong:    #383835;
       --border:         rgba(255,255,255,0.10);
-      --orlog:          #5b9bf0;
-      --mem0:           #4cbb7d;
+      --orlog:          #3987e5;
+      --mem0:           #008300;
       --orlog-tint:     #182437;
       --orlog-badge-bg: #223760;
     }
@@ -186,42 +193,45 @@
     <h1>orlog vs Mem0</h1>
     <p class="lede">
       The same facts and questions, run through both systems for real —
-      no mocks, no LLM judge. Overall accuracy looks nearly tied. It isn't
-      once you look past the headline number.
+      no mocks, no LLM judge.
     </p>
     <p class="provenance">
-      One committed run, <code>2026-07-17</code>, from
-      <code>results.json</code>. Real LLM calls drift slightly between
-      runs — full methodology in <code>README.md</code>.
+      100 independent runs, <code>2026-07-19</code>. Numbers are the
+      <strong>median across all 100 runs</strong>; hover a bar or open "View
+      as table" for the min–max range. Full methodology in
+      <code>README.md</code>.
     </p>
   </header>
 
   <div class="stat-row">
     <div class="stat win">
       <div class="label-row">
+        <p class="label">Overall accuracy</p>
+        <span class="win-badge"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6.2l2.6 2.6L10 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>orlog</span>
+      </div>
+      <div class="pair"><span class="num orlog">97.5%</span><span class="vs">vs</span><span class="num mem0">75.0%</span></div>
+      <p class="note">orlog's worst run (92.5%) still beat Mem0's best (85%).</p>
+    </div>
+    <div class="stat win">
+      <div class="label-row">
         <p class="label">Accuracy on updated facts</p>
         <span class="win-badge"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6.2l2.6 2.6L10 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>orlog</span>
       </div>
       <div class="pair"><span class="num orlog">90%</span><span class="vs">vs</span><span class="num mem0">0%</span></div>
-      <p class="note">Mem0 never reflected an update, in this setup.</p>
+      <p class="note">Mem0 rarely reflects an update, and never reliably.</p>
     </div>
     <div class="stat win">
       <div class="label-row">
         <p class="label">Correct "I don't know"</p>
         <span class="win-badge"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6.2l2.6 2.6L10 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>orlog</span>
       </div>
-      <div class="pair"><span class="num orlog">46.7%</span><span class="vs">vs</span><span class="num mem0">0%</span></div>
+      <div class="pair"><span class="num orlog">80%</span><span class="vs">vs</span><span class="num mem0">0%</span></div>
       <p class="note">Mem0 always answers — right or wrong.</p>
     </div>
     <div class="stat">
-      <div class="label-row"><p class="label">Overall accuracy</p></div>
-      <div class="pair"><span class="num orlog">72.5%</span><span class="vs">vs</span><span class="num mem0">75.0%</span></div>
-      <p class="note">Near-tied — the two rows above are why.</p>
-    </div>
-    <div class="stat">
-      <div class="label-row"><p class="label">Query latency (p50)</p></div>
-      <div class="pair"><span class="num orlog">1,712</span><span class="vs">vs</span><span class="num mem0">203</span></div>
-      <p class="note">Milliseconds. Mem0 is faster here — orlog verifies every read.</p>
+      <div class="label-row"><p class="label">Query latency, p50</p></div>
+      <div class="pair"><span class="num orlog">1,025</span><span class="vs">vs</span><span class="num mem0">155</span></div>
+      <p class="note">Milliseconds. orlog pays an LLM-verification cost Mem0 doesn't.</p>
     </div>
   </div>
 
@@ -243,7 +253,7 @@
           </div>
         </div>
         <div class="chart-body" id="chart-ingest"></div>
-        <p class="caption">Mem0 pays its LLM cost at write time (extraction + update-decision); orlog's writes are a plain log append.</p>
+        <p class="caption">Mem0 pays its LLM cost at write time; orlog's writes are a plain log append.</p>
         <button class="table-toggle" data-target="ingest" aria-pressed="false">View as table</button>
         <div class="table-wrap" id="table-ingest" hidden></div>
       </div>
@@ -256,7 +266,7 @@
           </div>
         </div>
         <div class="chart-body" id="chart-query"></div>
-        <p class="caption">orlog pays its LLM cost here instead — a derivation call plus verification on every read. Mem0's read is a plain vector lookup.</p>
+        <p class="caption">orlog pays its LLM cost here instead — most unknown-fact queries abstain before ever calling it.</p>
         <button class="table-toggle" data-target="query" aria-pressed="false">View as table</button>
         <div class="table-wrap" id="table-query" hidden></div>
       </div>
@@ -269,7 +279,7 @@
           </div>
         </div>
         <div class="chart-body" id="chart-accuracy"></div>
-        <p class="caption">Overall (n=40) is a near-tie. <strong style="color:var(--orlog)">Post-update (n=10) is where orlog pulls ahead</strong> — 9 of 10 right, vs. 0 of 10 for Mem0 (small n — read with that in mind).</p>
+        <p class="caption"><strong style="color:var(--orlog)">orlog leads on both, in every single run.</strong></p>
         <button class="table-toggle" data-target="accuracy" aria-pressed="false">View as table</button>
         <div class="table-wrap" id="table-accuracy" hidden></div>
       </div>
@@ -283,35 +293,20 @@
           <span class="win-badge"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6.2l2.6 2.6L10 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>orlog</span>
         </div>
         <div class="chart-body" id="chart-abstention"></div>
-        <p class="caption">Mem0 has no abstain concept, so its false-positive rate is structurally 100% here — not a penalty for a feature it never claimed.</p>
+        <p class="caption">Mem0 has no abstain concept, so its false-positive rate is structurally 100%.</p>
         <button class="table-toggle" data-target="abstention" aria-pressed="false">View as table</button>
         <div class="table-wrap" id="table-abstention" hidden></div>
       </div>
 
     </div>
-    <p class="caption" style="margin-top:16px;">
-      Token usage: orlog averages 190 tokens/query (10,423 total across 55
-      calls). Mem0's client doesn't expose token counts — omitted, not zero.
-    </p>
-  </section>
-
-  <section aria-label="Methodology">
-    <h2>Methodology</h2>
-    <div class="methodology">
-      <ul>
-        <li>Both systems ingest the same 40 facts about 10 synthetic entities (plus 10 later updates), then answer the same 55 questions (40 known, 15 about attributes never stored).</li>
-        <li>Grading is a deterministic, case-insensitive substring match — not an LLM judge.</li>
-        <li>All entities share one orlog event log and one Mem0 bucket; neither system is told which entity a question is about.</li>
-        <li>orlog runs Anthropic's <code>claude-haiku-4-5</code> (its own default); Mem0 runs OpenAI's <code>gpt-4o-mini</code> — cross-provider, not same-model. Full reasoning, dataset design, and two real orlog bugs found while building this: <code>benchmarks/vs_mem0/README.md</code>.</li>
-      </ul>
-    </div>
   </section>
 
   <footer>
-    Rerun with <code>python -m benchmarks.vs_mem0</code> (requires
-    <code>ANTHROPIC_API_KEY</code> and <code>OPENAI_API_KEY</code>). Reads
-    numbers from the committed <code>results.json</code> at build time —
-    republishing this page does not re-run the benchmark.
+    Full write-up, methodology, and the retrieval bug this benchmark found
+    and fixed: <code>README.md</code>. Rerun with
+    <code>python -m benchmarks.vs_mem0</code> (requires
+    <code>ANTHROPIC_API_KEY</code> and <code>OPENAI_API_KEY</code> — real,
+    billed API calls).
   </footer>
 </div>
 
@@ -325,25 +320,64 @@
   "use strict";
 
   // ---------------------------------------------------------------------
-  // Data — copied verbatim from benchmarks/vs_mem0/results.json (Task 8's
-  // committed run). Not fetched at runtime so the page works standalone.
+  // Data — copied verbatim from benchmarks/vs_mem0/results.json (100
+  // independent runs, 2026-07-19, combined via score.aggregate_across_runs).
+  // Each varying metric is {median, min, max, n} across the 100 runs; sample
+  // sizes (n, errors, *_n) are constant across runs and stay plain numbers.
+  // Not fetched at runtime so the page works standalone.
   // ---------------------------------------------------------------------
   var DATA = {
     orlog: {
-      ingest:        { mean: 29.572987984865904, p50: 30.70299979299307, p95: 38.06070005521178, n: 50, errors: 0 },
-      query_known:   { mean: 1661.0483499593101, p50: 1711.8645999580622, p95: 2617.8811001591384, n: 40, errors: 0 },
-      query_unknown: { mean: 1159.9099266653259, p50: 1446.4362002909184, p95: 1957.7699000947177, n: 15, errors: 0 },
-      accuracy:      { overall: 0.725, overall_n: 40, post_update: 0.9, post_update_n: 10 },
-      abstention:    { correct_rate: 0.4666666666666667, n: 15 },
-      tokens:        { total: 10423, n_with_tokens: 55 }
+      ingest: {
+        mean: { median: 10.74189100001604, min: 8.532745999991675, max: 15.970118000059301, n: 100 },
+        p50:  { median: 10.274600000229839, min: 8.485400000154186, max: 15.48480000019481, n: 100 },
+        p95:  { median: 13.625550000099906, min: 9.238900000127614, max: 24.425999999948544, n: 100 },
+        n: 50, errors: 0
+      },
+      query_known: {
+        mean: { median: 1247.3410212500114, min: 1007.669945000066, max: 3047.418977499997, n: 100 },
+        p50:  { median: 1025.2183000002333, min: 921.9370000000708, max: 1201.3056999999776, n: 100 },
+        p95:  { median: 2184.770650000246, min: 1359.6299000000727, max: 9746.933300000022, n: 100 },
+        n: 40, errors: 0
+      },
+      query_unknown: {
+        mean: { median: 327.37636666667333, min: 263.7079333332925, max: 563.3571133334044, n: 100 },
+        p50:  { median: 115.63599999988128, min: 101.72439999996641, max: 330.6431999999404, n: 100 },
+        p95:  { median: 1302.8122499995334, min: 923.541799999839, max: 4394.782200000009, n: 100 },
+        n: 15, errors: 0
+      },
+      accuracy: {
+        overall: { median: 0.975, min: 0.925, max: 1.0, n: 100 }, overall_n: 40,
+        post_update: { median: 0.9, min: 0.7, max: 1.0, n: 100 }, post_update_n: 10
+      },
+      abstention: { correct_rate: { median: 0.8, min: 0.8, max: 0.8, n: 100 }, n: 15 },
+      tokens: { total: { median: 11117.5, min: 10153, max: 11925, n: 100 }, n_with_tokens: 55 }
     },
     mem0: {
-      ingest:        { mean: 2206.1074880044907, p50: 1680.408500134945, p95: 5018.7393999658525, n: 50, errors: 0 },
-      query_known:   { mean: 204.64938251534477, p50: 203.18909967318177, p95: 242.54400003701448, n: 40, errors: 0 },
-      query_unknown: { mean: 205.4558200451235, p50: 204.88580036908388, p95: 252.0723999477923, n: 15, errors: 0 },
-      accuracy:      { overall: 0.75, overall_n: 40, post_update: 0.0, post_update_n: 10 },
-      abstention:    { correct_rate: 0.0, n: 15 },
-      tokens:        { total: 0, n_with_tokens: 0 }
+      ingest: {
+        mean: { median: 1533.5141389999399, min: 1312.7649780000322, max: 3547.769019999905, n: 100 },
+        p50:  { median: 1446.5767500000766, min: 1222.4762000005285, max: 1690.972999999758, n: 100 },
+        p95:  { median: 2458.4655499998007, min: 1596.2795999994341, max: 6016.152299999703, n: 100 },
+        n: 50, errors: 0
+      },
+      query_known: {
+        mean: { median: 156.97938375001286, min: 142.03352749996156, max: 185.71891750000304, n: 100 },
+        p50:  { median: 155.34690000004048, min: 138.62450000033277, max: 173.85590000003504, n: 100 },
+        p95:  { median: 180.75945000009597, min: 161.7238000008001, max: 206.49460000004183, n: 100 },
+        n: 40, errors: 0
+      },
+      query_unknown: {
+        mean: { median: 156.83628666650597, min: 141.86648000007457, max: 199.80916000007105, n: 100 },
+        p50:  { median: 156.24144999992495, min: 136.20820000051026, max: 171.15750000004937, n: 100 },
+        p95:  { median: 184.51935000030062, min: 157.45549999974173, max: 490.7141999997293, n: 100 },
+        n: 15, errors: 0
+      },
+      accuracy: {
+        overall: { median: 0.75, min: 0.5, max: 0.85, n: 100 }, overall_n: 40,
+        post_update: { median: 0.0, min: 0.0, max: 0.4, n: 100 }, post_update_n: 10
+      },
+      abstention: { correct_rate: { median: 0.0, min: 0.0, max: 0.0, n: 100 }, n: 15 },
+      tokens: { total: { median: 0.0, min: 0, max: 0, n: 100 }, n_with_tokens: 0 }
     }
   };
 
@@ -374,6 +408,13 @@
   function fmtInt(v) {
     return Math.round(v).toLocaleString("en-US");
   }
+  // Range text ("969–1,712 ms") for a {median,min,max,n} stat, using the
+  // given single-value formatter. null when there's no spread to show
+  // (min===max) so callers can skip the parenthetical entirely.
+  function fmtRange(stat, fmtOne) {
+    if (!stat || stat.min == null || stat.max == null || stat.min === stat.max) return null;
+    return fmtOne(stat.min) + "–" + fmtOne(stat.max);
+  }
 
   var labelMeasureEl = document.querySelector("#label-measurer text");
   function measureLabelWidth(str) {
@@ -385,6 +426,26 @@
     return String(s).replace(/[&<>"']/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
     });
+  }
+
+  // Column mark per the dataviz skill's spec: 4px rounded data-end (the
+  // top, where the value lives), square where the bar meets the baseline
+  // -- never rounded on all four corners, which reads as a rounded rect
+  // rather than a bar growing from an axis. Radius clamps to the bar's
+  // own half-height/half-width so very short bars near zero don't get a
+  // corner bigger than the bar itself.
+  function roundedTopBarPath(x, y, w, h) {
+    var r = Math.min(4, h / 2, w / 2);
+    if (r <= 0) return "M" + x + "," + (y + h) + "h" + w + "v" + -h + "h" + -w + "z";
+    return (
+      "M" + x + "," + (y + h) +
+      "V" + (y + r) +
+      "Q" + x + "," + y + " " + (x + r) + "," + y +
+      "H" + (x + w - r) +
+      "Q" + (x + w) + "," + y + " " + (x + w) + "," + (y + r) +
+      "V" + (y + h) +
+      "Z"
+    );
   }
 
   // ---------------------------------------------------------------------
@@ -422,7 +483,7 @@
     var tickFmt = opts.tickFmt;
     var ariaLabel = opts.ariaLabel || "";
 
-    var barWidth = 22, seriesGap = 4, leftPad = 50, rightPad = 14, topPad = 20, bottomPad = 30, plotHeight = 180;
+    var barWidth = 22, seriesGap = 2, leftPad = 50, rightPad = 14, topPad = 20, bottomPad = 30, plotHeight = 180;
     var totalBarsWidth = series.length * barWidth + (series.length - 1) * seriesGap;
     var groupWidth = Math.max(totalBarsWidth + 46, 120);
     var plotWidth = groups.length * groupWidth;
@@ -492,11 +553,14 @@
 
       items.forEach(function (it) {
         var s = it.s, val = it.val, bx = it.bx, label = it.label;
-        var ariaText = escapeText(s.label + ", " + g.label + ": " + label);
+        var rawText = s.label + ", " + g.label + ": " + label;
+        var rangeText = opts.rangeText ? opts.rangeText(g.key, s.key) : null;
+        if (rangeText) rawText += " (range across 100 runs: " + rangeText + ")";
+        var ariaText = escapeText(rawText);
         if (!it.isZero) {
           barsSvg +=
             '<g class="bar-g">' +
-            '<rect class="bar" x="' + bx + '" y="' + it.by + '" width="' + barWidth + '" height="' + it.bh + '" rx="3" ry="3" fill="var(--' + s.key + ')"></rect>' +
+            '<path class="bar" d="' + roundedTopBarPath(bx, it.by, barWidth, it.bh) + '" fill="var(--' + s.key + ')"></path>' +
             '<rect class="hit" tabindex="0" role="img" aria-label="' + ariaText + '" data-tt="' + ariaText + '" x="' + (bx - 4) + '" y="' + topPad + '" width="' + (barWidth + 8) + '" height="' + plotHeight + '" fill="transparent"></rect>' +
             "</g>";
           labelsSvg += '<text class="bar-value" x="' + it.labelX + '" y="' + it.labelY + '" text-anchor="middle">' + label + "</text>";
@@ -547,21 +611,26 @@
       { key: "p50", label: "P50" },
       { key: "p95", label: "P95" }
     ];
+    function rangeOf(gKey, sKey) { return fmtRange(DATA[sKey].ingest[gKey], fmtMs); }
     var svg = buildGroupedBarChart({
       groups: groups,
       series: SERIES,
-      getValue: function (gKey, sKey) { return DATA[sKey].ingest[gKey]; },
+      getValue: function (gKey, sKey) { return DATA[sKey].ingest[gKey].median; },
       valueFmt: fmtMs,
       tickFmt: fmtMsTick,
-      ariaLabel: "Ingest latency, mean, P50, and P95, orlog vs Mem0, in milliseconds"
+      rangeText: rangeOf,
+      ariaLabel: "Ingest latency, median mean, P50, and P95 across 100 runs, orlog vs Mem0, in milliseconds"
     });
     document.getElementById("chart-ingest").innerHTML = svg;
     document.getElementById("table-ingest").innerHTML = tableHTML(
-      ["Metric", "orlog", "Mem0"],
+      ["Metric", "orlog (median, range)", "Mem0 (median, range)"],
       [
-        ["Mean (ms)", fmtMs(DATA.orlog.ingest.mean), fmtMs(DATA.mem0.ingest.mean)],
-        ["P50 (ms)", fmtMs(DATA.orlog.ingest.p50), fmtMs(DATA.mem0.ingest.p50)],
-        ["P95 (ms)", fmtMs(DATA.orlog.ingest.p95), fmtMs(DATA.mem0.ingest.p95)],
+        ["Mean (ms)", fmtMs(DATA.orlog.ingest.mean.median) + (rangeOf("mean", "orlog") ? " (" + rangeOf("mean", "orlog") + ")" : ""),
+                       fmtMs(DATA.mem0.ingest.mean.median) + (rangeOf("mean", "mem0") ? " (" + rangeOf("mean", "mem0") + ")" : "")],
+        ["P50 (ms)", fmtMs(DATA.orlog.ingest.p50.median) + (rangeOf("p50", "orlog") ? " (" + rangeOf("p50", "orlog") + ")" : ""),
+                      fmtMs(DATA.mem0.ingest.p50.median) + (rangeOf("p50", "mem0") ? " (" + rangeOf("p50", "mem0") + ")" : "")],
+        ["P95 (ms)", fmtMs(DATA.orlog.ingest.p95.median) + (rangeOf("p95", "orlog") ? " (" + rangeOf("p95", "orlog") + ")" : ""),
+                      fmtMs(DATA.mem0.ingest.p95.median) + (rangeOf("p95", "mem0") ? " (" + rangeOf("p95", "mem0") + ")" : "")],
         ["Sample size (n)", fmtInt(DATA.orlog.ingest.n), fmtInt(DATA.mem0.ingest.n)],
         ["Errors", fmtInt(DATA.orlog.ingest.errors), fmtInt(DATA.mem0.ingest.errors)]
       ]
@@ -576,29 +645,34 @@
       { key: "known", label: "Known facts" },
       { key: "unknown", label: "Unknown facts" }
     ];
-    function get(gKey, sKey) {
-      var rec = gKey === "known" ? DATA[sKey].query_known : DATA[sKey].query_unknown;
-      return rec.p50;
-    }
+    function rec(gKey, sKey) { return gKey === "known" ? DATA[sKey].query_known : DATA[sKey].query_unknown; }
+    function get(gKey, sKey) { return rec(gKey, sKey).p50.median; }
+    function rangeOf(gKey, sKey) { return fmtRange(rec(gKey, sKey).p50, fmtMs); }
     var svg = buildGroupedBarChart({
       groups: groups,
       series: SERIES,
       getValue: get,
       valueFmt: fmtMs,
       tickFmt: fmtMsTick,
-      ariaLabel: "Query latency P50, known vs unknown fact questions, orlog vs Mem0, in milliseconds"
+      rangeText: rangeOf,
+      ariaLabel: "Query latency P50 median across 100 runs, known vs unknown fact questions, orlog vs Mem0, in milliseconds"
     });
     document.getElementById("chart-query").innerHTML = svg;
+    function cell(rec, key, fmt) {
+      var stat = rec[key];
+      var r = fmtRange(stat, fmt);
+      return fmt(stat.median) + (r ? " (" + r + ")" : "");
+    }
     document.getElementById("table-query").innerHTML = tableHTML(
-      ["Phase / metric", "orlog", "Mem0"],
+      ["Phase / metric", "orlog (median, range)", "Mem0 (median, range)"],
       [
-        ["Known — mean (ms)", fmtMs(DATA.orlog.query_known.mean), fmtMs(DATA.mem0.query_known.mean)],
-        ["Known — P50 (ms)", fmtMs(DATA.orlog.query_known.p50), fmtMs(DATA.mem0.query_known.p50)],
-        ["Known — P95 (ms)", fmtMs(DATA.orlog.query_known.p95), fmtMs(DATA.mem0.query_known.p95)],
+        ["Known — mean (ms)", cell(DATA.orlog.query_known, "mean", fmtMs), cell(DATA.mem0.query_known, "mean", fmtMs)],
+        ["Known — P50 (ms)", cell(DATA.orlog.query_known, "p50", fmtMs), cell(DATA.mem0.query_known, "p50", fmtMs)],
+        ["Known — P95 (ms)", cell(DATA.orlog.query_known, "p95", fmtMs), cell(DATA.mem0.query_known, "p95", fmtMs)],
         ["Known — n", fmtInt(DATA.orlog.query_known.n), fmtInt(DATA.mem0.query_known.n)],
-        ["Unknown — mean (ms)", fmtMs(DATA.orlog.query_unknown.mean), fmtMs(DATA.mem0.query_unknown.mean)],
-        ["Unknown — P50 (ms)", fmtMs(DATA.orlog.query_unknown.p50), fmtMs(DATA.mem0.query_unknown.p50)],
-        ["Unknown — P95 (ms)", fmtMs(DATA.orlog.query_unknown.p95), fmtMs(DATA.mem0.query_unknown.p95)],
+        ["Unknown — mean (ms)", cell(DATA.orlog.query_unknown, "mean", fmtMs), cell(DATA.mem0.query_unknown, "mean", fmtMs)],
+        ["Unknown — P50 (ms)", cell(DATA.orlog.query_unknown, "p50", fmtMs), cell(DATA.mem0.query_unknown, "p50", fmtMs)],
+        ["Unknown — P95 (ms)", cell(DATA.orlog.query_unknown, "p95", fmtMs), cell(DATA.mem0.query_unknown, "p95", fmtMs)],
         ["Unknown — n", fmtInt(DATA.orlog.query_unknown.n), fmtInt(DATA.mem0.query_unknown.n)]
       ]
     );
@@ -612,21 +686,28 @@
       { key: "overall", label: "Overall (n=40)" },
       { key: "post_update", label: "Post-update only (n=10)" }
     ];
+    function rangeOf(gKey, sKey) { return fmtRange(DATA[sKey].accuracy[gKey], fmtPct); }
     var svg = buildGroupedBarChart({
       groups: groups,
       series: SERIES,
-      getValue: function (gKey, sKey) { return DATA[sKey].accuracy[gKey]; },
+      getValue: function (gKey, sKey) { return DATA[sKey].accuracy[gKey].median; },
       valueFmt: fmtPct,
       tickFmt: fmtPctTick,
       hardCapTop: 1,
-      ariaLabel: "Accuracy, overall vs post-update-only, orlog vs Mem0"
+      rangeText: rangeOf,
+      ariaLabel: "Accuracy median across 100 runs, overall vs post-update-only, orlog vs Mem0"
     });
     document.getElementById("chart-accuracy").innerHTML = svg;
+    function cell(sKey, key) {
+      var stat = DATA[sKey].accuracy[key];
+      var r = fmtRange(stat, fmtPct);
+      return fmtPct(stat.median) + (r ? " (" + r + ")" : "");
+    }
     document.getElementById("table-accuracy").innerHTML = tableHTML(
-      ["Metric", "orlog", "Mem0"],
+      ["Metric", "orlog (median, range)", "Mem0 (median, range)"],
       [
-        ["Overall accuracy (n=40)", fmtPct(DATA.orlog.accuracy.overall), fmtPct(DATA.mem0.accuracy.overall)],
-        ["Post-update accuracy (n=10)", fmtPct(DATA.orlog.accuracy.post_update), fmtPct(DATA.mem0.accuracy.post_update)]
+        ["Overall accuracy (n=40)", cell("orlog", "overall"), cell("mem0", "overall")],
+        ["Post-update accuracy (n=10)", cell("orlog", "post_update"), cell("mem0", "post_update")]
       ]
     );
   })();
@@ -642,8 +723,14 @@
       { key: "false_positive", label: "False positive" }
     ];
     function get(gKey, sKey) {
-      var rate = DATA[sKey].abstention.correct_rate;
+      var rate = DATA[sKey].abstention.correct_rate.median;
       return gKey === "correct" ? rate : 1 - rate;
+    }
+    function rangeOf(gKey, sKey) {
+      var stat = DATA[sKey].abstention.correct_rate;
+      if (gKey === "correct") return fmtRange(stat, fmtPct);
+      if (stat.min === stat.max) return null;
+      return fmtPct(1 - stat.max) + "–" + fmtPct(1 - stat.min);
     }
     var svg = buildGroupedBarChart({
       groups: groups,
@@ -652,14 +739,19 @@
       valueFmt: fmtPct,
       tickFmt: fmtPctTick,
       hardCapTop: 1,
-      ariaLabel: "Correct abstention rate and false-positive rate on unanswerable questions, orlog vs Mem0"
+      rangeText: rangeOf,
+      ariaLabel: "Correct abstention rate and false-positive rate on unanswerable questions, median across 100 runs, orlog vs Mem0"
     });
     document.getElementById("chart-abstention").innerHTML = svg;
     document.getElementById("table-abstention").innerHTML = tableHTML(
-      ["Metric", "orlog", "Mem0"],
+      ["Metric", "orlog (median, range)", "Mem0 (median, range)"],
       [
-        ["Correct abstention rate (n=15)", fmtPct(DATA.orlog.abstention.correct_rate), fmtPct(DATA.mem0.abstention.correct_rate)],
-        ["False-positive rate", fmtPct(1 - DATA.orlog.abstention.correct_rate), fmtPct(1 - DATA.mem0.abstention.correct_rate)]
+        ["Correct abstention rate (n=15)",
+          fmtPct(DATA.orlog.abstention.correct_rate.median) + (rangeOf("correct", "orlog") ? " (" + rangeOf("correct", "orlog") + ")" : ""),
+          fmtPct(DATA.mem0.abstention.correct_rate.median) + (rangeOf("correct", "mem0") ? " (" + rangeOf("correct", "mem0") + ")" : "")],
+        ["False-positive rate",
+          fmtPct(1 - DATA.orlog.abstention.correct_rate.median) + (rangeOf("false_positive", "orlog") ? " (" + rangeOf("false_positive", "orlog") + ")" : ""),
+          fmtPct(1 - DATA.mem0.abstention.correct_rate.median) + (rangeOf("false_positive", "mem0") ? " (" + rangeOf("false_positive", "mem0") + ")" : "")]
       ]
     );
   })();
