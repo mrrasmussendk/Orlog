@@ -28,8 +28,9 @@ def runtime(tmp_path):
     ws = Workspace(tmp_path / "myproject")
     # Pinned to "hashing" rather than relying on OrlogConfig's default: the
     # real default (spec §B3's fastembed/bge-small) is network-bound on a
-    # cold build, which this test suite deliberately never exercises (see
-    # README's "Known deviations").
+    # cold build, which this Runtime-level test suite avoids (see README's
+    # "Known deviations" -- test_retrieval_hybrid.py does exercise the real
+    # FastEmbedEmbedder directly, just not through a full Runtime).
     config = OrlogConfig(workspace=WorkspaceConfig(name="myproject"), retrieval=RetrievalConfig(embedder="hashing"))
     rt = Runtime(ws, config)
     yield rt
