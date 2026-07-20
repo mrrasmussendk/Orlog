@@ -4,12 +4,13 @@ workspace -- ORLOG-SPEC.md §B1.
 """
 
 from datetime import datetime, timezone
+import sys
 
 import pytest
 
 import json
 
-from orlog.cli import build_parser, cmd_forget, cmd_init, cmd_inspect, cmd_replay, cmd_serve, write_claude_code_mcp_config
+from orlog.cli import build_parser, cmd_conformance, cmd_forget, cmd_init, cmd_inspect, cmd_replay, cmd_serve, write_claude_code_mcp_config
 from orlog.config import load_config, save_config
 from orlog.models.event import EventDraft
 from orlog.vault import Vault, generate_key
@@ -279,3 +280,87 @@ def test_serve_keeps_running_when_the_embedder_preload_times_out(tmp_path, monke
 
     assert rc == 0
     assert "embedder" in capsys.readouterr().err.lower()
+
+
+def test_conformance_dir_resolves_inside_meipass_when_frozen(tmp_path, monkeypatch):
+    from orlog.cli import _conformance_dir
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+
+    assert _conformance_dir() == tmp_path / "tests" / "conformance"
+
+
+def test_conformance_dir_resolves_the_source_tree_when_not_frozen(monkeypatch):
+    from orlog.cli import _conformance_dir
+
+    monkeypatch.delattr(sys, "frozen", raising=False)
+
+    result = _conformance_dir()
+
+    assert result.name == "conformance" and result.parent.name == "tests"
+
+
+def test_conformance_runs_pytest_in_process_and_writes_a_report(tmp_path, monkeypatch):
+    from orlog import cli as cli_module
+
+    conformance_dir = tmp_path / "conformance"
+    conformance_dir.mkdir()
+    monkeypatch.setattr(cli_module, "_conformance_dir", lambda: conformance_dir)
+    monkeypatch.chdir(tmp_path)
+
+    captured = {}
+
+    def fake_main(pytest_args):
+        captured["args"] = pytest_args
+        return 0
+
+    monkeypatch.setattr(pytest, "main", fake_main)
+
+    rc = cli_module.cmd_conformance(build_parser().parse_args(["conformance"]))
+
+    assert rc == 0
+    assert captured["args"] == [str(conformance_dir), "-v"]
+    report = json.loads((tmp_path / "conformance-report.json").read_text())
+    assert report == {"target": "self", "passed": True}
+
+
+def test_conformance_reports_failure_when_pytest_main_returns_nonzero(tmp_path, monkeypatch):
+    from orlog import cli as cli_module
+
+    conformance_dir = tmp_path / "conformance"
+    conformance_dir.mkdir()
+    monkeypatch.setattr(cli_module, "_conformance_dir", lambda: conformance_dir)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(pytest, "main", lambda pytest_args: 1)
+
+    rc = cli_module.cmd_conformance(build_parser().parse_args(["conformance"]))
+
+    assert rc == 1
+    report = json.loads((tmp_path / "conformance-report.json").read_text())
+    assert report["passed"] is False
+
+
+def test_conformance_fails_clearly_when_the_suite_directory_is_missing(tmp_path, monkeypatch, capsys):
+    from orlog import cli as cli_module
+
+    missing_dir = tmp_path / "nope"
+    monkeypatch.setattr(cli_module, "_conformance_dir", lambda: missing_dir)
+
+    rc = cli_module.cmd_conformance(build_parser().parse_args(["conformance"]))
+
+    assert rc == 2
+    assert "conformance suite not found" in capsys.readouterr().err
+
+
+def test_conformance_fails_clearly_when_pytest_is_not_installed(monkeypatch, capsys):
+    from orlog import cli as cli_module
+
+    # Make pytest import fail
+    monkeypatch.setitem(sys.modules, "pytest", None)
+
+    rc = cli_module.cmd_conformance(build_parser().parse_args(["conformance"]))
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "pytest is not installed" in err

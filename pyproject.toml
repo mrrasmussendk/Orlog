@@ -27,6 +27,10 @@ dev = [
 benchmark = [
     "mem0ai>=2.0",
 ]
+build = [
+    "pyinstaller>=6.0",
+    "pyinstaller-hooks-contrib>=2024.0",
+]
 
 [project.scripts]
 orlog = "orlog.cli:main"
