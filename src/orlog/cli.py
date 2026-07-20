@@ -165,7 +165,11 @@ def _conformance_dir() -> Path:
 
 
 def cmd_conformance(args: argparse.Namespace) -> int:
-    import pytest
+    try:
+        import pytest
+    except ImportError:
+        print("pytest is not installed -- install orlog[dev] to run conformance", file=sys.stderr)
+        return 2
 
     conformance_dir = _conformance_dir()
     if not conformance_dir.is_dir():

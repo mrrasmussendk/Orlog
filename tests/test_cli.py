@@ -351,3 +351,19 @@ def test_conformance_fails_clearly_when_the_suite_directory_is_missing(tmp_path,
 
     assert rc == 2
     assert "conformance suite not found" in capsys.readouterr().err
+
+
+def test_conformance_fails_clearly_when_pytest_is_not_installed(tmp_path, monkeypatch, capsys):
+    from orlog import cli as cli_module
+
+    conformance_dir = tmp_path / "conformance"
+    conformance_dir.mkdir()
+    monkeypatch.setattr(cli_module, "_conformance_dir", lambda: conformance_dir)
+    # Make pytest import fail
+    monkeypatch.setitem(sys.modules, "pytest", None)
+
+    rc = cli_module.cmd_conformance(build_parser().parse_args(["conformance"]))
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "pytest is not installed" in err or "dev" in err.lower()
