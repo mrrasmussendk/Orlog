@@ -179,7 +179,18 @@ def cmd_conformance(args: argparse.Namespace) -> int:
     # In-process, not subprocess: inside a frozen binary sys.executable IS
     # the orlog binary itself, not a real Python interpreter, so
     # `sys.executable -m pytest` (the old approach) cannot work there.
-    returncode = int(pytest.main([str(conformance_dir), "-v"]))
+    #
+    # --confcutdir: inside the frozen binary's extracted temp dir there is
+    # no pyproject.toml for pytest to find while searching upward for a
+    # rootdir, so it falls back to conformance_dir itself as rootdir -- which
+    # caps conftest.py discovery there too and skips tests/conftest.py (one
+    # level up, bundled alongside it), breaking the make_log/make_event
+    # fixtures it defines. Explicitly widening confcutdir to the bundle
+    # root lets pytest walk up into tests/conftest.py without changing what
+    # actually gets collected (still just conformance_dir).
+    returncode = int(pytest.main([
+        str(conformance_dir), "-v", "--confcutdir", str(conformance_dir.parent.parent),
+    ]))
     Path("conformance-report.json").write_text(
         json.dumps({"target": args.target, "passed": returncode == 0}, indent=2)
     )

@@ -320,7 +320,9 @@ def test_conformance_runs_pytest_in_process_and_writes_a_report(tmp_path, monkey
     rc = cli_module.cmd_conformance(build_parser().parse_args(["conformance"]))
 
     assert rc == 0
-    assert captured["args"] == [str(conformance_dir), "-v"]
+    assert captured["args"] == [
+        str(conformance_dir), "-v", "--confcutdir", str(conformance_dir.parent.parent),
+    ]
     report = json.loads((tmp_path / "conformance-report.json").read_text())
     assert report == {"target": "self", "passed": True}
 
