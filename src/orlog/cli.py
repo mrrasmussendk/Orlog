@@ -26,7 +26,6 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -156,18 +155,32 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _conformance_dir() -> Path:
+    """Resolve tests/conformance/ both from a source checkout and from
+    inside a frozen PyInstaller binary (bundled as `datas` in orlog.spec,
+    unpacked under sys._MEIPASS at runtime)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / "tests" / "conformance"
+    return Path(__file__).resolve().parents[2] / "tests" / "conformance"
+
+
 def cmd_conformance(args: argparse.Namespace) -> int:
-    conformance_dir = Path(__file__).resolve().parents[2] / "tests" / "conformance"
+    import pytest
+
+    conformance_dir = _conformance_dir()
     if not conformance_dir.is_dir():
         print(f"conformance suite not found at {conformance_dir}", file=sys.stderr)
         return 2
 
-    result = subprocess.run([sys.executable, "-m", "pytest", str(conformance_dir), "-v"])
+    # In-process, not subprocess: inside a frozen binary sys.executable IS
+    # the orlog binary itself, not a real Python interpreter, so
+    # `sys.executable -m pytest` (the old approach) cannot work there.
+    returncode = int(pytest.main([str(conformance_dir), "-v"]))
     Path("conformance-report.json").write_text(
-        json.dumps({"target": args.target, "passed": result.returncode == 0}, indent=2)
+        json.dumps({"target": args.target, "passed": returncode == 0}, indent=2)
     )
     print("Conformance report written to conformance-report.json")
-    return result.returncode
+    return returncode
 
 
 def cmd_replay(args: argparse.Namespace) -> int:
