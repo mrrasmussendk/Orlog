@@ -165,6 +165,24 @@ orlog forget <PSEUDONYM_TOKEN>  # crypto-shred
 orlog conformance               # run tests/conformance/ against this install
 ```
 
+## Standalone binary (no Python required)
+
+Every tagged release (`vX.Y.Z`) publishes standalone `orlog` executables
+for Windows, macOS, and Linux to
+[GitHub Releases](https://github.com/mrrasmussendk/Orlog/releases) — no
+Python install required. Download the zip for your platform, unzip it
+somewhere on `PATH`, and the same CLI/MCP-server workflow above applies
+unchanged:
+
+```
+orlog init myworkspace --claude-code
+```
+
+The binary bundles both the `anthropic` and `openai` extras. The default
+`fastembed` embedder still downloads its model over the network on first
+use (see `orlog.toml`'s `[retrieval] embedder`); everything else works
+fully offline.
+
 ## Known deviations from ORLOG-SPEC.md v1.0
 
 - `pipeline.py` is 426 lines, well over this project's own ~200-line-per-file
