@@ -43,7 +43,16 @@ jobs:
       - name: Smoke test the built binary
         run: python packaging/smoke_test.py dist/${{ matrix.bin_name }}
 
-      - name: Package artifact
+      - name: Package artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Compress-Archive -Path "dist/${{ matrix.bin_name }}" -DestinationPath "out/orlog-$version-${{ matrix.asset_os }}-${{ matrix.asset_arch }}.zip"
+
+      - name: Package artifact (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -e
