@@ -5,9 +5,6 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
-
 jobs:
   build:
     strategy:
@@ -69,6 +66,8 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -78,3 +77,4 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: out/*.zip
+          generate_release_notes: true
