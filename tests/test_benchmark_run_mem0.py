@@ -1,4 +1,12 @@
-from benchmarks.vs_mem0 import run_mem0
+import pytest
+
+# mem0ai ships in the optional [benchmark] extra. Without this guard the
+# module fails to IMPORT, which is a collection error -- pytest aborts the
+# entire run rather than skipping one file, so an optional dependency took
+# the whole suite down with it.
+pytest.importorskip("mem0", reason="requires the optional [benchmark] extra")
+
+from benchmarks.vs_mem0 import run_mem0  # noqa: E402
 
 
 def test_ingest_record_shape():
