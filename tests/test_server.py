@@ -25,6 +25,10 @@ from orlog.workspace import Workspace
 EXPECTED_TOOL_NAMES = {
     "remember", "recall", "recall_history", "list_entities",
     "list_attributes", "check_action", "stats",
+    # The retrieval-trace read side. Writing a trace is a parameter on
+    # recall() (session_id) rather than a tool of its own -- a read that
+    # records itself, not a separate thing to remember to call.
+    "list_sessions", "get_session",
 }
 
 
