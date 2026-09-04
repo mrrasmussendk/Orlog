@@ -53,6 +53,16 @@ class GroundTruthFact(BaseModel):
     value: str
     valid_from: datetime
     valid_to: datetime
+    # Transaction time: when this fact entered the log, as opposed to
+    # valid_from/valid_to, which say when it was TRUE. Carried here so a
+    # served answer can date its own evidence -- without it a citation shows
+    # a validity window but not when the record learned it, and a correction
+    # is indistinguishable from an original assertion.
+    #
+    # Optional for the same reason self_supported has a default: a truth
+    # table built by hand (tests) or predating this field still constructs,
+    # and None honestly means "unknown" rather than fabricating a timestamp.
+    recorded_at: datetime | None = None
     # Runtime.remember()'s own write-time verdict: does this fact's
     # remembered text actually support the value it was recorded with?
     # Computed once, at write time, from the event's own payload -- never
@@ -100,6 +110,7 @@ def build_ground_truth(events: Sequence[Event]) -> dict[str, GroundTruthFact]:
                 value=str(event.payload.get("value")),
                 valid_from=event.occurred_at,
                 valid_to=valid_to,
+                recorded_at=event.recorded_at,
                 self_supported=event.payload.get("self_supported", True),
                 evidence_span=event.payload.get("evidence_span"),
             )

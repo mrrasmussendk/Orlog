@@ -193,3 +193,28 @@ def test_recall_history_truncates_to_the_horizon(runtime):
     assert [c["value"] for c in chain] == ["current", "delinquent"]
     # The day-20 correction has not been learned yet at this horizon.
     assert all(c["recorded_at"] < "2026-03-21" for c in chain)
+
+
+# ------------------------------------------------------------- citations --
+
+def test_a_citation_dates_itself_on_both_axes(runtime):
+    _seed(runtime)
+
+    believed = recall_tool(runtime, KEY, as_of=DAY5, known_as_of=DAY5)
+    citation, = believed["citations"]
+
+    # When the cited fact was TRUE...
+    assert citation["valid_from"].startswith("2026-03-02")
+    # ...and when the record LEARNED it. Without the second, this citation is
+    # indistinguishable from the correction that supersedes it on day 20.
+    assert citation["recorded_at"].startswith("2026-03-04")
+
+
+def test_the_correction_cites_its_own_later_recorded_at(runtime):
+    _seed(runtime)
+
+    known_today = recall_tool(runtime, KEY, as_of=DAY5)
+    citation, = known_today["citations"]
+
+    assert citation["valid_from"].startswith("2026-03-02")
+    assert citation["recorded_at"].startswith("2026-03-21")
