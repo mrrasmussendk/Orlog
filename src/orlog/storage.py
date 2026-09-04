@@ -135,14 +135,14 @@ class SegmentedLog:
         prior_events = EventLog(self._segment_paths[-2], clock=self._clock).read_all()
         return _hash_of(prior_events[-1]) if prior_events else ""
 
-    def append(self, draft: EventDraft) -> Event:
+    def append(self, draft: EventDraft, *, recorded_at: datetime | None = None) -> Event:
         if self._current.path.exists() and self._current.path.stat().st_size >= self._rotate_bytes:
             last_hash = self._current._last_hash
             new_path = self.events_dir / f"log-{len(self._segment_paths) + 1:05d}.jsonl"
             self._segment_paths.append(new_path)
             self._current = EventLog(new_path, clock=self._clock, initial_prev_hash=last_hash)
             self._current_segment_count = 0
-        event = self._current.append(draft)
+        event = self._current.append(draft, recorded_at=recorded_at)
         self._current_segment_count += 1
         return event
 

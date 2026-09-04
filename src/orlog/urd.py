@@ -83,13 +83,27 @@ class EventLog:
             return _hash_of(events[-1])
         return initial_prev_hash if initial_prev_hash is not None else ""
 
-    def append(self, draft: EventDraft) -> Event:
-        """Validate, assign id/recorded_at/prev_hash, and write one Event."""
+    def append(self, draft: EventDraft, *, recorded_at: datetime | None = None) -> Event:
+        """Validate, assign id/recorded_at/prev_hash, and write one Event.
+
+        `recorded_at` overrides the log's clock. It exists for BACKFILL and
+        IMPORT -- replaying a historical record whose transaction times are
+        already known -- and is deliberately a keyword-only argument to
+        append() rather than a field on EventDraft: spec §A3's "assigned by
+        the log, never the caller" stays true of the draft an ordinary
+        caller builds, so no ordinary write can set it by accident. Event's
+        own recorded_at >= occurred_at validator still applies.
+
+        Note that backfilling breaks the incidental invariant that
+        recorded_at rises with append order, so anything filtering by
+        recorded_at must filter, not slice a prefix -- see
+        Runtime.build_pipeline()'s known_as_of.
+        """
         try:
             event = Event(
                 id=str(ULID()),
                 occurred_at=draft.occurred_at,
-                recorded_at=self._clock(),
+                recorded_at=self._clock() if recorded_at is None else recorded_at,
                 actor=draft.actor,
                 type=draft.type,
                 payload=draft.payload,

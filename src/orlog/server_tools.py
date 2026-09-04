@@ -65,7 +65,8 @@ def _empty_abstention(as_of: datetime, reason: str) -> dict:
 
 
 def remember_tool(
-    runtime: Runtime, text: str, *, occurred_at: str | None = None, type: str = "fact",
+    runtime: Runtime, text: str, *, occurred_at: str | None = None,
+    recorded_at: str | None = None, type: str = "fact",
     actor: str = "user", entity: str | None = None, attribute: str | None = None, value: str | None = None,
     entity_detail: str | None = None, evidence_span: str | None = None,
     register_new_type: bool = False, register_new_attribute: bool = False,
@@ -82,8 +83,9 @@ def remember_tool(
     own docstring/helpers for the rules.
     """
     occurred = _parse_datetime(occurred_at) if occurred_at else datetime.now(timezone.utc)
+    recorded = _parse_datetime(recorded_at) if recorded_at else None
     event = runtime.remember(
-        text, occurred_at=occurred, event_type=type, actor=actor,
+        text, occurred_at=occurred, recorded_at=recorded, event_type=type, actor=actor,
         entity=entity, attribute=attribute, value=value, entity_detail=entity_detail,
         evidence_span=evidence_span,
         register_new_type=register_new_type, register_new_attribute=register_new_attribute,
@@ -91,13 +93,24 @@ def remember_tool(
     return {"event_id": event.id}
 
 
-def recall_tool(runtime: Runtime, query: str, *, as_of: str = "now") -> dict:
-    """spec §B9: {query, as_of?="now"} -> the Answer object (spec §A3)."""
+def recall_tool(
+    runtime: Runtime, query: str, *, as_of: str = "now", known_as_of: str | None = None
+) -> dict:
+    """spec §B9: {query, as_of?="now", known_as_of?} -> the Answer object
+    (spec §A3).
+
+    The two time parameters are independent axes. `as_of` is VALID time --
+    the instant you are asking about. `known_as_of` is TRANSACTION time --
+    the instant the answer is allowed to know about; facts recorded after
+    it are excluded entirely. Omitting known_as_of means "everything on
+    record now", i.e. the previous single-axis behaviour, unchanged.
+    """
     now = datetime.now(timezone.utc)
     as_of_dt = now if as_of == "now" else _parse_datetime(as_of)
+    known_dt = _parse_datetime(known_as_of) if known_as_of else None
 
     entity, sep, attribute = query.rpartition(".")
-    pipeline = runtime.build_pipeline(now=now)
+    pipeline = runtime.build_pipeline(now=now, known_as_of=known_dt)
     if pipeline is None:
         # No Pipeline to instrument here -- there's nothing to project from
         # yet -- but this is still a real recall() call that abstained, and
@@ -169,15 +182,25 @@ def recall_tool(runtime: Runtime, query: str, *, as_of: str = "now") -> dict:
     return answer.model_dump(mode="json")
 
 
-def recall_history_tool(runtime: Runtime, query: str) -> dict:
-    """spec §B9: {query} -> the fact's full chain with validity windows."""
+def recall_history_tool(runtime: Runtime, query: str, *, known_as_of: str | None = None) -> dict:
+    """spec §B9: {query, known_as_of?} -> the fact's full chain with both
+    time axes per revision: the validity window (valid time) AND the
+    recorded_at the revision entered the log (transaction time).
+
+    recorded_at is what makes a correction legible as a correction. Without
+    it the chain shows only that a value changed, not when the record
+    learned it had been wrong -- which is the difference between a memory
+    failure and a reasoning failure.
+    """
     entity, sep, attribute = query.rpartition(".")
     if not sep:
         return {"query": query, "chain": []}
 
+    known_dt = _parse_datetime(known_as_of) if known_as_of else None
     fact_events = [
         e for e in runtime.log.read_all()
         if e.type == "fact" and e.payload.get("entity") == entity and e.payload.get("attribute") == attribute
+        and (known_dt is None or e.recorded_at <= known_dt)
     ]
     if not fact_events:
         return {"query": query, "chain": []}
@@ -192,6 +215,7 @@ def recall_history_tool(runtime: Runtime, query: str) -> dict:
             "value": events_by_id[event_id].payload.get("value"),
             "valid_from": window.valid_from.isoformat(),
             "valid_to": None if window.valid_to == OPEN_VALID_TO else window.valid_to.isoformat(),
+            "recorded_at": events_by_id[event_id].recorded_at.isoformat(),
         })
     return {"query": query, "chain": chain}
 
