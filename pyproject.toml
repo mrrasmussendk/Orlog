@@ -10,7 +10,12 @@ license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2,<3",
-    "mcp>=1.0",
+    # Upper-bounded deliberately: mcp 2.x renamed FastMCP to MCPServer and
+    # changed other APIs, so server.py (which imports mcp.server.fastmcp)
+    # cannot import under it. An unbounded ">=1.0" silently became a broken
+    # install the day 2.x shipped -- nothing in this repo changed. Lift the
+    # bound together with the migration to the MCPServer API.
+    "mcp>=1.0,<2",
     "python-ulid>=2",
     "cryptography>=41",
     "tomli>=2; python_version < '3.11'",

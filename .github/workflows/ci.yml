@@ -16,5 +16,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install -e ".[dev]"
+      # The LLM adapter tests construct real provider exception types
+      # (openai.APITimeoutError, anthropic's equivalents), so the optional
+      # provider extras are required for the suite to run, not just to pass.
+      - run: python -m pip install -e ".[anthropic,openai,dev]"
       - run: pytest
