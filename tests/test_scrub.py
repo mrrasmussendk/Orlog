@@ -70,3 +70,17 @@ def test_disabling_the_regex_pack_leaves_text_untouched(vault):
 def test_text_with_no_pii_is_unchanged(vault):
     text = "the sky is blue today"
     assert scrub(text, vault) == text
+
+
+def test_an_iso_date_is_not_mistaken_for_a_phone_number(vault):
+    # 2026-04-15 fits _PHONE's shape exactly (digit, 8 chars of
+    # [digits - space ()], digit). Dates are ordinary fact content in a
+    # temporal memory system, so they must survive scrubbing verbatim.
+    assert scrub("contract_end is 2026-04-15", vault) == "contract_end is 2026-04-15"
+
+
+def test_a_real_phone_number_is_still_tokenized(vault):
+    scrubbed = scrub("call me on 555-0147-2231", vault)
+
+    assert "555-0147-2231" not in scrubbed
+    assert "PHONE" in scrubbed

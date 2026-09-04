@@ -33,7 +33,17 @@ _EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 _SSN_LIKE = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")  # US SSN shape: NNN-NN-NNNN
 _CPR_LIKE = re.compile(r"(?<!\d)\d{6}-\d{4}(?!\d)")  # Nordic CPR shape: DDMMYY-XXXX
 _KEY_SHAPED = re.compile(r"(?<![A-Za-z0-9])(?:sk|pk|xox[bp])-[A-Za-z0-9_\-]{16,}")
-_PHONE = re.compile(r"(?<!\w)(\+?\d[\d\-\s()]{7,}\d)(?!\w)")
+# An ISO-8601 calendar date (2026-04-15) otherwise satisfies _PHONE exactly
+# -- a leading digit, 8 characters drawn from [digits - space ()], a trailing
+# digit -- so every bare date stored anywhere in a memory silently became a
+# PHONE token, corrupting the value it was recorded with. Dates are ordinary
+# fact content in a temporal memory system (contract_end, start_date, ...),
+# so the phone pattern refuses that shape explicitly rather than eating it.
+# A date embedded in a longer digit run (a real phone number that happens to
+# contain one) is unaffected: the guard only fires when the candidate span
+# BEGINS with a complete date.
+_ISO_DATE_PREFIX = r"(?!\d{4}-\d{2}-\d{2}(?!\d))"
+_PHONE = re.compile(r"(?<!\w)" + _ISO_DATE_PREFIX + r"(\+?\d[\d\-\s()]{7,}\d)(?!\w)")
 # NANP-style dot separators (212.555.0147) don't fit the general _PHONE
 # class above -- "." can't just be added to it, since that class also
 # matches IP addresses, decimals, and dotted version strings (192.168.1.100,
