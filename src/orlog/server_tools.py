@@ -19,9 +19,11 @@ KEY, never an answer.
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 from orlog.errors import RetrieverUnavailableError
+from orlog.models.retrieval import RetrievalCitation, RetrievalQuery, RetrievalResult
 from orlog.pipeline import AnswerCandidate
 from orlog.retrieval_hybrid import resolve_key
 from orlog.runtime import Runtime
@@ -93,23 +95,102 @@ def remember_tool(
     return {"event_id": event.id}
 
 
+def _value_from_claim(claim: str | None, entity: str | None, attribute: str | None) -> str | None:
+    """Pull the bare value out of an Answer's "entity.attribute = value"
+    claim. Parsed off the documented prefix rather than a loose split, so a
+    value containing " = " survives; an unexpected shape yields None instead
+    of a silently mangled trace entry."""
+    if not claim or entity is None or attribute is None:
+        return None
+    prefix = f"{entity}.{attribute} = "
+    return claim[len(prefix):] if claim.startswith(prefix) else None
+
+
 def recall_tool(
-    runtime: Runtime, query: str, *, as_of: str = "now", known_as_of: str | None = None
+    runtime: Runtime, query: str, *, as_of: str = "now", known_as_of: str | None = None,
+    session_id: str | None = None,
 ) -> dict:
-    """spec §B9: {query, as_of?="now", known_as_of?} -> the Answer object
-    (spec §A3).
+    """spec §B9: {query, as_of?="now", known_as_of?, session_id?} -> the
+    Answer object (spec §A3).
 
     The two time parameters are independent axes. `as_of` is VALID time --
     the instant you are asking about. `known_as_of` is TRANSACTION time --
-    the instant the answer is allowed to know about; facts recorded after
-    it are excluded entirely. Omitting known_as_of means "everything on
-    record now", i.e. the previous single-axis behaviour, unchanged.
+    the instant the answer is allowed to know about; facts recorded after it
+    are excluded entirely. Omitting known_as_of means "everything on record
+    now", i.e. the previous single-axis behaviour, unchanged.
+
+    Passing `session_id` additionally appends a type="retrieval" event
+    recording what was asked and what was answered (models/retrieval.py), so
+    the context this read fed can be reconstructed later. Omitting it traces
+    nothing, which stays the default.
     """
     now = datetime.now(timezone.utc)
     as_of_dt = now if as_of == "now" else _parse_datetime(as_of)
-    known_dt = _parse_datetime(known_as_of) if known_as_of else None
 
+    # The horizon is RESOLVED here, once, whether or not the caller supplied
+    # one. A default that exists only as `None` is a decision the system made
+    # and did not write down -- the same axis collapse that made past belief
+    # unreconstructible before known_as_of existed, one level up.
+    # `horizon_defaulted` keeps "the caller chose now" and "the caller chose
+    # nothing" distinguishable in the trace, since only the former is a claim
+    # about intent.
+    horizon_defaulted = known_as_of is None
+    known_dt = now if horizon_defaulted else _parse_datetime(known_as_of)
+
+    # ...but a DEFAULTED horizon is still passed to the projection as None,
+    # not as `now`. The two are equivalent -- "every fact recorded at or
+    # before this instant" is every fact on an append-only log -- and passing
+    # `now` instead would put a wall-clock timestamp into truth_version,
+    # which is part of the answer cache key (pipeline.answer -> cache_key).
+    # Every call would then miss the cache. The trace still records the
+    # resolved instant; `horizon_defaulted` is what tells a reader that the
+    # timestamp is orlog's resolution of an unspecified horizon rather than
+    # a caller's stated intent.
+    horizon_filter = None if horizon_defaulted else known_dt
+
+    started = time.perf_counter()
+    answer, entity, attribute = _recall(runtime, query, as_of_dt, horizon_filter, now)
+    latency_ms = (time.perf_counter() - started) * 1000.0
+
+    if session_id is not None:
+        runtime.ledger.record_retrieval(
+            session_id=session_id,
+            query=RetrievalQuery(
+                entity=entity, attribute=attribute, query=query,
+                valid_at=as_of_dt, known_as_of=known_dt,
+                horizon_defaulted=horizon_defaulted,
+            ),
+            result=RetrievalResult(
+                verified=answer["verified"],
+                value=_value_from_claim(answer.get("claim"), entity, attribute),
+                claim=answer.get("claim"),
+                abstained=answer["abstained"],
+                reasons=answer.get("reasons", []),
+                # Strict: RetrievalCitation forbids extras, so a new field on
+                # AnswerCitation fails a test here rather than being silently
+                # dropped from every trace.
+                citations=[RetrievalCitation.model_validate(c) for c in answer.get("citations", [])],
+                route=answer.get("route"),
+                truth_version=answer.get("truth_version"),
+            ),
+            latency_ms=latency_ms,
+            occurred_at=now,
+        )
+
+    return answer
+
+
+def _recall(
+    runtime: Runtime, query: str, as_of_dt: datetime, known_dt: datetime | None, now: datetime
+) -> tuple[dict, str | None, str | None]:
+    """The recall body. Returns the Answer dict plus the (entity, attribute)
+    the query actually RESOLVED to -- the free-text path only learns the key
+    after semantic resolution, and a trace keyed on the raw query string
+    would not say which fact was actually read.
+    """
     entity, sep, attribute = query.rpartition(".")
+    key_entity, key_attribute = (entity, attribute) if sep else (None, None)
+
     pipeline = runtime.build_pipeline(now=now, known_as_of=known_dt)
     if pipeline is None:
         # No Pipeline to instrument here -- there's nothing to project from
@@ -121,7 +202,7 @@ def recall_tool(
         runtime.stats.record_recall()
         runtime.stats.record_abstention(["NO_CANDIDATES"])
         runtime.ledger.record_abstention(query_id=query, reasons=["NO_CANDIDATES"], occurred_at=now)
-        return _empty_abstention(as_of_dt, "NO_CANDIDATES")
+        return _empty_abstention(as_of_dt, "NO_CANDIDATES"), key_entity, key_attribute
 
     if sep:
         # Exact "entity.attribute" key lookup -- unchanged, fast path, no
@@ -131,7 +212,7 @@ def recall_tool(
         # so a fuzzy fallback here would risk silently answering about the
         # WRONG entity instead of honestly abstaining.
         answer = pipeline.answer(query, entity, attribute, as_of_dt, now=now)
-        return answer.model_dump(mode="json")
+        return answer.model_dump(mode="json"), entity, attribute
 
     # No "." at all: not a key, it's free text. Search every fact's own
     # remembered text for the one whose MEANING best matches this query --
@@ -147,7 +228,7 @@ def recall_tool(
         runtime.stats.record_recall()
         runtime.stats.record_abstention(["EMBEDDER_UNAVAILABLE"])
         runtime.ledger.record_abstention(query_id=query, reasons=["EMBEDDER_UNAVAILABLE"], occurred_at=now)
-        return _empty_abstention(as_of_dt, "EMBEDDER_UNAVAILABLE")
+        return _empty_abstention(as_of_dt, "EMBEDDER_UNAVAILABLE"), None, None
 
     candidates = resolve_key(query, pipeline.view, pipeline.events_by_id, embedder, k=5)
     strong = [c for c in candidates if c.score >= runtime.config.retrieval.min_confidence]
@@ -156,7 +237,7 @@ def recall_tool(
         runtime.stats.record_recall()
         runtime.stats.record_abstention(["NO_CANDIDATES"])
         runtime.ledger.record_abstention(query_id=query, reasons=["NO_CANDIDATES"], occurred_at=now)
-        return _empty_abstention(as_of_dt, "NO_CANDIDATES")
+        return _empty_abstention(as_of_dt, "NO_CANDIDATES"), None, None
 
     margin = runtime.config.retrieval.ambiguity_margin
     tied = [c for c in strong if c.score >= strong[0].score * margin]
@@ -175,11 +256,48 @@ def recall_tool(
                 for c in tied
             ],
         )
-        return answer.model_dump(mode="json")
+        # Deliberately unresolved: an AMBIGUOUS answer did not read a key, so
+        # the trace must not name one.
+        return answer.model_dump(mode="json"), None, None
 
     top = strong[0]
     answer = pipeline.answer(query, top.entity, top.attribute, as_of_dt, now=now)
-    return answer.model_dump(mode="json")
+    return answer.model_dump(mode="json"), top.entity, top.attribute
+
+
+def list_sessions_tool(runtime: Runtime) -> dict:
+    """spec §B9 (new): {} -> {sessions: [{session_id, steps, started_at,
+    ended_at}]}, oldest first."""
+    sessions = [
+        {
+            "session_id": session_id,
+            "steps": len(events),
+            "started_at": events[0].recorded_at.isoformat(),
+            "ended_at": events[-1].recorded_at.isoformat(),
+        }
+        for session_id, events in runtime.ledger.sessions().items()
+    ]
+    sessions.sort(key=lambda s: (s["started_at"], s["session_id"]))
+    return {"sessions": sessions}
+
+
+def get_session_tool(runtime: Runtime, session_id: str) -> dict:
+    """spec §B9 (new): {session_id} -> {session_id, retrievals: [...]} in step
+    order.
+
+    Returns the RAW ordered records, not verdandi_sessions' rendered digest:
+    a replay harness rebuilds an exact context from these fields and needs
+    them structured, whereas the digest is a human-readable summary that
+    deliberately discards structure.
+    """
+    events = runtime.ledger.sessions().get(session_id, [])
+    return {
+        "session_id": session_id,
+        "retrievals": [
+            {"event_id": e.id, "recorded_at": e.recorded_at.isoformat(), **e.payload}
+            for e in events
+        ],
+    }
 
 
 def recall_history_tool(runtime: Runtime, query: str, *, known_as_of: str | None = None) -> dict:

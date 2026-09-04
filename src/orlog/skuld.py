@@ -35,7 +35,10 @@ from datetime import datetime
 
 from orlog.heimdall import VerificationResult
 from orlog.models.event import Event, EventDraft
+from orlog.models.retrieval import RetrievalQuery, RetrievalRecord, RetrievalResult
 from orlog.urd import EventLog
+
+RETRIEVAL_TYPE = "retrieval"
 
 DEFAULT_PASS_BONUS = 0.5
 DEFAULT_CORRECTION_BONUS = 1.0
@@ -75,6 +78,72 @@ class OutcomeLedger:
                 payload={"query_id": query_id, "reasons": reasons},
             )
         )
+
+    def record_retrieval(
+        self,
+        *,
+        session_id: str,
+        query: RetrievalQuery,
+        result: RetrievalResult,
+        latency_ms: float,
+        occurred_at: datetime,
+    ) -> Event:
+        """Append a type="retrieval" event: what one reader asked and what it
+        was told, on both time axes (see models/retrieval.py).
+
+        `step` is assigned HERE, never by the caller -- the same discipline
+        urd applies to recorded_at, and for the same reason. A caller-supplied
+        step can collide, skip, or restart, and a trace whose ordering cannot
+        be trusted cannot anchor a byte-identity replay of the context it
+        produced.
+        """
+        record = RetrievalRecord(
+            session_id=session_id,
+            step=self.next_step(session_id),
+            query=query,
+            result=result,
+            latency_ms=latency_ms,
+        )
+        return self._log.append(
+            EventDraft(
+                occurred_at=occurred_at,
+                actor="agent",
+                type=RETRIEVAL_TYPE,
+                payload=record.model_dump(mode="json"),
+            )
+        )
+
+    def next_step(self, session_id: str) -> int:
+        """The next monotonic step for this session: one past the highest
+        already recorded, or 0 for a new session.
+
+        Derived from the log rather than held in memory, so a session
+        survives a server restart without restarting its numbering. This is
+        an O(events) scan per call, which matches the reference
+        implementation's existing posture (build_pipeline re-reads the whole
+        log on every recall); a real deployment would index
+        (session_id, step).
+        """
+        steps = [
+            event.payload.get("step", -1)
+            for event in self._log.read_all()
+            if event.type == RETRIEVAL_TYPE and event.payload.get("session_id") == session_id
+        ]
+        return max(steps) + 1 if steps else 0
+
+    def sessions(self) -> dict[str, list[Event]]:
+        """Every traced session, each event list in step order."""
+        grouped: dict[str, list[Event]] = {}
+        for event in self._log.read_all():
+            if event.type != RETRIEVAL_TYPE:
+                continue
+            session_id = event.payload.get("session_id")
+            if session_id is None:
+                continue
+            grouped.setdefault(session_id, []).append(event)
+        for events in grouped.values():
+            events.sort(key=lambda e: (e.payload.get("step", 0), e.id))
+        return grouped
 
     def record_correction(self, *, query_id: str, corrected_by: str, note: str, corrected_to_event_id: str, occurred_at: datetime, bonus: float = DEFAULT_CORRECTION_BONUS) -> Event:
         """Append an outcome.correction event (spec §7.1: {query_id,

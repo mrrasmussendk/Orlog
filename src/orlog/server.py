@@ -22,6 +22,8 @@ from orlog.server_tools import (
     check_action_tool,
     list_attributes_tool,
     list_entities_tool,
+    get_session_tool,
+    list_sessions_tool,
     recall_history_tool,
     recall_tool,
     remember_tool,
@@ -165,11 +167,20 @@ def build_server(runtime: Runtime) -> FastMCP:
             "the instant the answer may know about -- facts recorded after it "
             "are excluded entirely, so a correction appended later cannot "
             "rewrite the answer to a question about the past. Omit known_as_of "
-            "for everything currently on record."
+            "for everything currently on record. "
+            "Pass `session_id` (a stable id for one agent run) to additionally "
+            "record this read as a durable retrieval event: what was asked, on "
+            "both axes, and what was answered, including the citations. That is "
+            "what makes the context this read fed reconstructible later; read it "
+            "back with get_session. Steps are numbered by the log, not the "
+            "caller. Omitting session_id records nothing."
         )
     )
-    def recall(query: str, as_of: str = "now", known_as_of: str | None = None) -> dict:
-        return recall_tool(runtime, query, as_of=as_of, known_as_of=known_as_of)
+    def recall(
+        query: str, as_of: str = "now", known_as_of: str | None = None,
+        session_id: str | None = None,
+    ) -> dict:
+        return recall_tool(runtime, query, as_of=as_of, known_as_of=known_as_of, session_id=session_id)
 
     @mcp.tool()
     def recall_history(query: str, known_as_of: str | None = None) -> dict:
@@ -210,6 +221,31 @@ def build_server(runtime: Runtime) -> FastMCP:
     def check_action(action_description: str) -> dict:
         """Advisory only: warnings and prior outcomes for a similar past action."""
         return check_action_tool(runtime, action_description)
+
+    @mcp.tool()
+    def list_sessions() -> dict:
+        """Every traced agent run in this workspace, oldest first.
+
+        Returns {sessions: [{session_id, steps, started_at, ended_at}]}. A
+        session exists only because some recall() was called with a
+        session_id -- tracing is opt-in, never retroactive.
+        """
+        return list_sessions_tool(runtime)
+
+    @mcp.tool()
+    def get_session(session_id: str) -> dict:
+        """One traced run's reads, in step order.
+
+        Returns {session_id, retrievals: [...]}, each entry carrying the
+        query on both time axes (valid_at, known_as_of, horizon_defaulted),
+        the full answer including citations, and latency_ms. known_as_of is
+        always a resolved timestamp -- never null, and never the literal the
+        caller passed.
+
+        These are the raw ordered records, not a rendered digest: they exist
+        to let a caller rebuild the exact context a run saw.
+        """
+        return get_session_tool(runtime, session_id)
 
     @mcp.tool()
     def stats() -> dict:
