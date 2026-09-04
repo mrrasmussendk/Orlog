@@ -106,6 +106,13 @@ class AnswerCitation(BaseModel):
     excerpt: str
     valid_from: datetime
     valid_to: datetime | None  # None == open-ended
+    # Transaction time: when this evidence entered the log. valid_from/
+    # valid_to say when the cited fact was true; this says when it became
+    # known. Both are needed to tell an original assertion from a later
+    # correction of the same window -- with only the validity window, a
+    # citation cannot date itself, and the caller has to make a second
+    # recall_history() call to find out.
+    recorded_at: datetime | None = None
 
 
 class AnswerCandidate(BaseModel):
@@ -371,6 +378,7 @@ class Pipeline:
                     excerpt=fact.evidence_span if fact.evidence_span is not None else fact.value,
                     valid_from=fact.valid_from,
                     valid_to=None if fact.valid_to == OPEN_VALID_TO else fact.valid_to,
+                    recorded_at=fact.recorded_at,
                 )
             )
         return citations
