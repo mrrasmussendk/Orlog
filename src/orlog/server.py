@@ -38,7 +38,8 @@ def build_server(runtime: Runtime) -> FastMCP:
 
     @mcp.tool()
     def remember(
-        text: str, occurred_at: str | None = None, type: str = "fact", actor: str = "user",
+        text: str, occurred_at: str | None = None, recorded_at: str | None = None,
+        type: str = "fact", actor: str = "user",
         entity: str | None = None, attribute: str | None = None, value: str | None = None,
         entity_detail: str | None = None, evidence_span: str | None = None,
         register_new_type: bool = False, register_new_attribute: bool = False,
@@ -118,9 +119,18 @@ def build_server(runtime: Runtime) -> FastMCP:
         one instead of hard-failing. Entities with no ":" in them, or a
         workspace with no known_types declared, are exempt from this check
         (but never from the entity_detail rule above).
+
+        The two timestamps are independent axes and both are optional.
+        `occurred_at` is VALID time -- when the fact became true (default:
+        now). `recorded_at` is TRANSACTION time -- when this assertion
+        entered the record (default: now, assigned by the log). Supply
+        recorded_at only when BACKFILLING a historical record whose
+        transaction times are already known; it is what makes "what did
+        this system believe on day X" answerable later, via recall()'s
+        known_as_of. It may not precede occurred_at.
         """
         return remember_tool(
-            runtime, text, occurred_at=occurred_at, type=type, actor=actor,
+            runtime, text, occurred_at=occurred_at, recorded_at=recorded_at, type=type, actor=actor,
             entity=entity, attribute=attribute, value=value, entity_detail=entity_detail,
             evidence_span=evidence_span,
             register_new_type=register_new_type, register_new_attribute=register_new_attribute,
@@ -149,19 +159,30 @@ def build_server(runtime: Runtime) -> FastMCP:
             "with reasons: [\"UNSUPPORTED_BY_SOURCE\"] -- permanently, on every "
             "future read, and without ever blocking. Verification is otherwise "
             "bounded by a hard timeout: reasons: [\"VERIFY_TIMEOUT\"] if it can't "
-            "complete in time, again instead of blocking."
+            "complete in time, again instead of blocking. "
+            "There are two INDEPENDENT time axes. `as_of` is valid time: the "
+            "instant you are asking about. `known_as_of` is transaction time: "
+            "the instant the answer may know about -- facts recorded after it "
+            "are excluded entirely, so a correction appended later cannot "
+            "rewrite the answer to a question about the past. Omit known_as_of "
+            "for everything currently on record."
         )
     )
-    def recall(query: str, as_of: str = "now") -> dict:
-        return recall_tool(runtime, query, as_of=as_of)
+    def recall(query: str, as_of: str = "now", known_as_of: str | None = None) -> dict:
+        return recall_tool(runtime, query, as_of=as_of, known_as_of=known_as_of)
 
     @mcp.tool()
-    def recall_history(query: str) -> dict:
+    def recall_history(query: str, known_as_of: str | None = None) -> dict:
         """The fact's full revision chain with validity windows.
 
         Same "entity.attribute" key lookup as recall() -- not free text.
+
+        Each revision carries both time axes: valid_from/valid_to (when the
+        value was true) and recorded_at (when this revision entered the
+        log). Pass known_as_of to truncate the chain to what had been
+        recorded by that instant.
         """
-        return recall_history_tool(runtime, query)
+        return recall_history_tool(runtime, query, known_as_of=known_as_of)
 
     @mcp.tool()
     def list_entities(prefix: str | None = None, limit: int | None = None) -> dict:

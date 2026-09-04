@@ -182,6 +182,7 @@ class Runtime:
         text: str,
         *,
         occurred_at: datetime | None = None,
+        recorded_at: datetime | None = None,
         event_type: str = "fact",
         actor: str = "user",
         entity: str | None = None,
@@ -271,7 +272,7 @@ class Runtime:
             payload["entity_label"] = entity
             payload["entity_detail"] = entity_detail
         draft = EventDraft(occurred_at=occurred_at, actor=actor, type=event_type, payload=payload)
-        event = self.log.append(draft)
+        event = self.log.append(draft, recorded_at=recorded_at)
         self.index.index_event(event, segment=self._current_segment_name(), offset=self.log.current_segment_offset())
         self.stats.record_append()
         return event
@@ -387,22 +388,47 @@ class Runtime:
     def _current_segment_name(self) -> str:
         return self.log._current.path.name
 
-    def build_pipeline(self, *, now: datetime | None = None) -> Pipeline | None:
+    def build_pipeline(
+        self, *, now: datetime | None = None, known_as_of: datetime | None = None
+    ) -> Pipeline | None:
         """Returns None if the log has no "fact" events yet -- there is
         nothing to project (verdandi raises ValueError on zero events).
+
+        `known_as_of` is the TRANSACTION-time horizon: only facts already
+        recorded by that instant are projected. It is the second time axis,
+        independent of the valid-time `as_of` a caller passes to
+        Pipeline.answer(). Together they answer "what did this system
+        believe on day X about day Y" -- as_of alone cannot, because a
+        correction appended later supersedes on the valid-time axis and so
+        silently rewrites the answer to a question about the past.
+
+        This is a filter, not a prefix slice: a backfilled recorded_at need
+        not rise with append order (see EventLog.append).
+
+        The horizon is folded into truth_version because that string is
+        part of the answer cache key (pipeline.answer -> cache_key). Two
+        horizons can otherwise project different views yet collide on
+        built_from -- the last event in log order can be the same event for
+        both -- and the second would then be served the first's cached
+        answer. It also makes every Answer self-describing about the
+        horizon it was computed under.
         """
         now = now or datetime.now(timezone.utc)
         events = self.log.read_all()
         fact_events = [
             e for e in events
             if e.type == "fact" and e.payload.get("entity") is not None and e.payload.get("attribute") is not None
+            and (known_as_of is None or e.recorded_at <= known_as_of)
         ]
         if not fact_events:
             return None
 
         view, pv = build_supersession_chains(fact_events, builder="orlog-runtime", built_at=now)
         truth = build_ground_truth(fact_events)
-        verifier = Heimdall(truth, truth_version=f"windows@{pv.built_from}")
+        truth_version = f"windows@{pv.built_from}"
+        if known_as_of is not None:
+            truth_version += f"|known@{known_as_of.isoformat()}"
+        verifier = Heimdall(truth, truth_version=truth_version)
         return Pipeline(
             view=view,
             events_by_id={e.id: e for e in fact_events},
