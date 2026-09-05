@@ -28,8 +28,23 @@ from orlog.server_tools import (
     stats_tool,
 )
 
-_SPEC_PATH = Path(__file__).resolve().parents[2] / "docs" / "ORLOG-SPEC.md"
-_CONFORMANCE_REPORT_PATH = Path("conformance-report.json")
+def _spec_text() -> str | None:
+    """The normative spec, served as the orlog://spec MCP resource.
+
+    Tries the installed package data first, then the source checkout.
+    Resolving only via `parents[2]/docs` worked exclusively in a checkout:
+    from site-packages (or the PyInstaller binary, whose orlog.spec bundles
+    tests/ but not docs/) that path does not exist, and the advertised
+    resource silently returned the literal string "spec not found" to every
+    client instead of the spec.
+    """
+    packaged = Path(__file__).resolve().parent / "spec_data" / "ORLOG-SPEC.md"
+    if packaged.exists():
+        return packaged.read_text(encoding="utf-8")
+    checkout = Path(__file__).resolve().parents[2] / "docs" / "ORLOG-SPEC.md"
+    if checkout.exists():
+        return checkout.read_text(encoding="utf-8")
+    return None
 
 
 def build_server(runtime: Runtime) -> FastMCP:
@@ -218,12 +233,19 @@ def build_server(runtime: Runtime) -> FastMCP:
 
     @mcp.resource("orlog://spec")
     def spec_resource() -> str:
-        return _SPEC_PATH.read_text(encoding="utf-8") if _SPEC_PATH.exists() else "spec not found"
+        return _spec_text() or "spec not found"
 
     @mcp.resource("orlog://conformance-report")
     def conformance_report_resource() -> str:
-        if _CONFORMANCE_REPORT_PATH.exists():
-            return _CONFORMANCE_REPORT_PATH.read_text(encoding="utf-8")
+        # Resolved against the WORKSPACE, not the server process's cwd:
+        # a server spawned by an MCP client (Claude Code, say) inherits
+        # that client's working directory, which is not the workspace and
+        # never holds the report.
+        report_path = runtime.workspace.root / "conformance-report.json"
+        if not report_path.exists():
+            report_path = Path("conformance-report.json")  # legacy cwd location
+        if report_path.exists():
+            return report_path.read_text(encoding="utf-8")
         return json.dumps({"status": "no conformance run yet"})
 
     return mcp

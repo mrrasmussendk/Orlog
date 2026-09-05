@@ -65,6 +65,13 @@ class CacheEntry(BaseModel):
     created_at: datetime
     last_verified_at: datetime
     hits: int = 0
+    #: The retrieval exclusion counts that produced this assertion. Stored
+    #: so a cache hit reports the same `excluded` as the fresh answer did:
+    #: serving the hardcoded zeros meant the identical question answered
+    #: twice reported "1 superseded revision excluded" and then "0", and a
+    #: client using `excluded` to decide whether to call recall_history was
+    #: told there was no history to look at.
+    excluded: dict = {}
 
 
 class RouteCache:
@@ -83,8 +90,11 @@ class RouteCache:
             self._store.move_to_end(key)  # most-recently-used
         return entry
 
-    def put(self, key: str, assertion: Assertion, *, now: datetime) -> CacheEntry:
-        entry = CacheEntry(key=key, assertion=assertion, created_at=now, last_verified_at=now, hits=0)
+    def put(self, key: str, assertion: Assertion, *, now: datetime, excluded: dict | None = None) -> CacheEntry:
+        entry = CacheEntry(
+            key=key, assertion=assertion, created_at=now, last_verified_at=now, hits=0,
+            excluded=dict(excluded or {}),
+        )
         self._store[key] = entry
         self._store.move_to_end(key)
         while len(self._store) > self._max_entries:

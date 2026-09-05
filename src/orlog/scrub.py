@@ -32,7 +32,25 @@ from orlog.vault import Vault
 _EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 _SSN_LIKE = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")  # US SSN shape: NNN-NN-NNNN
 _CPR_LIKE = re.compile(r"(?<!\d)\d{6}-\d{4}(?!\d)")  # Nordic CPR shape: DDMMYY-XXXX
-_KEY_SHAPED = re.compile(r"(?<![A-Za-z0-9])(?:sk|pk|xox[bp])-[A-Za-z0-9_\-]{16,}")
+# Credential shapes. The original pattern only matched HYPHEN-delimited
+# sk-/pk-/xox[bp]- prefixes, which misses most of what is actually pasted
+# into a memory: Stripe and OpenAI now use underscores (sk_live_...,
+# sk-proj-...), GitHub uses ghp_/gho_/ghu_/ghs_/ghr_, AWS access key ids
+# have no delimiter at all, and Google API keys start AIza. A secret that
+# slips past here lands in the append-only log in CLEARTEXT -- so it can
+# never be reached by vault.forget()'s crypto-shredding -- and is then
+# shipped verbatim to the LLM provider as candidate fact text.
+_KEY_SHAPED = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"(?:sk|pk|rk)[-_](?:live|test|proj)?[-_]?[A-Za-z0-9_\-]{16,}"  # Stripe / OpenAI style
+    r"|xox[bpasr]-[A-Za-z0-9\-]{10,}"                                # Slack
+    r"|gh[pousr]_[A-Za-z0-9]{36,}"                                   # GitHub
+    r"|github_pat_[A-Za-z0-9_]{22,}"                                 # GitHub fine-grained
+    r"|AKIA[0-9A-Z]{16}"                                             # AWS access key id
+    r"|AIza[0-9A-Za-z_\-]{35}"                                       # Google API key
+    r"|sk-ant-[A-Za-z0-9_\-]{16,}"                                   # Anthropic
+    r")"
+)
 # An ISO-8601 calendar date (2026-04-15) otherwise satisfies _PHONE exactly
 # -- a leading digit, 8 characters drawn from [digits - space ()], a trailing
 # digit -- so every bare date stored anywhere in a memory silently became a
@@ -44,6 +62,31 @@ _KEY_SHAPED = re.compile(r"(?<![A-Za-z0-9])(?:sk|pk|xox[bp])-[A-Za-z0-9_\-]{16,}
 # BEGINS with a complete date.
 _ISO_DATE_PREFIX = r"(?!\d{4}-\d{2}-\d{2}(?!\d))"
 _PHONE = re.compile(r"(?<!\w)" + _ISO_DATE_PREFIX + r"(\+?\d[\d\-\s()]{7,}\d)(?!\w)")
+#: Any ISO date anywhere inside a candidate span, not just at its start.
+#: The prefix guard above only refuses a span that BEGINS with a complete
+#: date, and the phone class is loose enough to begin one character later:
+#: "contract 2026-04-15 2026-04-16 renewal" matched the span
+#: "04-15 2026-04-16" -- starting after the first hyphen, where the
+#: four-digit lookahead cannot fire -- and durably rewrote two ordinary
+#: dates as PHONE_1 in the immutable log.
+_ISO_DATE_ANYWHERE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+#: A real phone number has 7-15 digits (ITU E.164 caps it at 15). The bare
+#: "[\d\-\s()]{7,}" class counts separators toward that length, so runs of
+#: plainly non-phone grouped numbers ("budget 1 234 567 890 kr",
+#: "range 100 - 200 - 300 units") were redacted too.
+_PHONE_MIN_DIGITS = 7
+_PHONE_MAX_DIGITS = 15
+
+
+def _is_phone_like(span: str) -> bool:
+    """Whether a _PHONE candidate span is plausibly a phone number rather
+    than dates or ordinary grouped figures.
+    """
+    if _ISO_DATE_ANYWHERE.search(span):
+        return False
+    digits = sum(1 for c in span if c.isdigit())
+    return _PHONE_MIN_DIGITS <= digits <= _PHONE_MAX_DIGITS
 # NANP-style dot separators (212.555.0147) don't fit the general _PHONE
 # class above -- "." can't just be added to it, since that class also
 # matches IP addresses, decimals, and dotted version strings (192.168.1.100,
@@ -74,5 +117,31 @@ def scrub(text: str, vault: Vault, *, detectors: list[str] | None = None) -> str
         return text
 
     for kind, pattern in _REGEX_DETECTORS:
+        if pattern is _PHONE:
+            # The loose phone class needs a plausibility check its regex
+            # can't express (see _is_phone_like): leave a non-phone span
+            # exactly as written instead of tokenizing it.
+            text = pattern.sub(
+                lambda m: vault.tokenize(m.group(0), kind="PHONE") if _is_phone_like(m.group(0)) else m.group(0),
+                text,
+            )
+            continue
         text = pattern.sub(lambda m, k=kind: vault.tokenize(m.group(0), kind=k), text)
     return text
+
+
+def detect_pii_kinds(text: str) -> set[str]:
+    """Which regex-pack detectors match anywhere in `text`.
+
+    Detection without tokenization, for callers that need to REFUSE a value
+    rather than rewrite it -- see Runtime._reject_pii_in_key, where the
+    value is a lookup key that cannot be scrubbed without breaking recall.
+    """
+    kinds = set()
+    for kind, pattern in _REGEX_DETECTORS:
+        for match in pattern.finditer(text):
+            if pattern is _PHONE and not _is_phone_like(match.group(0)):
+                continue
+            kinds.add(kind)
+            break
+    return kinds

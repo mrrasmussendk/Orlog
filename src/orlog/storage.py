@@ -24,11 +24,13 @@ Design decisions:
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from orlog.errors import StorageError
 from orlog.models.event import Event, EventDraft
 from orlog.urd import EventLog, _hash_of
 
@@ -117,6 +119,7 @@ class SegmentedLog:
         self.events_dir.mkdir(parents=True, exist_ok=True)
         self._clock = clock
         self._rotate_bytes = rotate_bytes
+        self._head_path = self.events_dir / "HEAD"
         self._segment_paths = sorted(self.events_dir.glob("log-*.jsonl"))
         if not self._segment_paths:
             self._segment_paths = [self.events_dir / "log-00001.jsonl"]
@@ -129,6 +132,28 @@ class SegmentedLog:
         # (and again on rotation below), never inside append() itself.
         self._current_segment_count = len(self._current.read_all())
 
+    def _next_segment_path(self) -> Path:
+        """The next unused log-NNNNN.jsonl.
+
+        Numbered from the highest segment number that actually exists, not
+        from len(self._segment_paths): those diverge the moment there is a
+        gap in the numbering (an archived or manually removed early
+        segment), and the count-based name then collided with a segment
+        already on disk. The collision appended a duplicate path to
+        _segment_paths, so read_all() returned that segment's events twice
+        and verify_chain(full=True) reported a break in an untampered log.
+        """
+        highest = 0
+        for path in self.events_dir.glob("log-*.jsonl"):
+            try:
+                highest = max(highest, int(path.stem.split("-")[1]))
+            except (IndexError, ValueError):
+                continue  # not one of ours; leave it alone
+        candidate = self.events_dir / f"log-{highest + 1:05d}.jsonl"
+        if candidate.exists():  # belt and braces -- never rotate onto live data
+            raise StorageError(f"refusing to rotate onto an existing segment: {candidate}")
+        return candidate
+
     def _hash_before_current(self) -> str | None:
         if len(self._segment_paths) <= 1:
             return None
@@ -138,13 +163,47 @@ class SegmentedLog:
     def append(self, draft: EventDraft, *, recorded_at: datetime | None = None) -> Event:
         if self._current.path.exists() and self._current.path.stat().st_size >= self._rotate_bytes:
             last_hash = self._current._last_hash
-            new_path = self.events_dir / f"log-{len(self._segment_paths) + 1:05d}.jsonl"
+            new_path = self._next_segment_path()
             self._segment_paths.append(new_path)
             self._current = EventLog(new_path, clock=self._clock, initial_prev_hash=last_hash)
             self._current_segment_count = 0
         event = self._current.append(draft, recorded_at=recorded_at)
         self._current_segment_count += 1
+        self._write_head(event)
         return event
+
+    def _write_head(self, event: Event) -> None:
+        """Record the chain head outside the segments themselves.
+
+        verify_chain() only ever checked that each event links to the one
+        before it, which makes it blind in one direction: lopping events off
+        the END of the log leaves a shorter chain that is still perfectly
+        self-consistent. Deleting the newest segment and the last line of
+        the one before it passed verify_chain(full=True) and reported
+        "hash chain verified" -- an append-only log silently losing its most
+        recent memories, which is the one thing it exists not to do.
+
+        An anchor written outside the chain closes that: the head hash and
+        the total event count cannot both be reproduced by truncation.
+        Written after the event is durable, so a crash between the two
+        leaves the anchor BEHIND the log (detected as a mismatch and
+        repairable by replay) rather than ahead of it.
+        """
+        self._head_path.write_text(
+            json.dumps({"count": self.event_count(), "head": _hash_of(event)}),
+            encoding="utf-8",
+        )
+
+    def event_count(self) -> int:
+        return sum(len(EventLog(p, clock=self._clock).read_all()) for p in self._segment_paths)
+
+    def _read_head(self) -> dict | None:
+        if not self._head_path.exists():
+            return None
+        try:
+            return json.loads(self._head_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
 
     def read_all(self) -> list[Event]:
         events: list[Event] = []
@@ -181,9 +240,20 @@ class SegmentedLog:
             return self._current.verify_chain(expected_prev=self._hash_before_current() or "")
 
         expected_prev = ""
+        count = 0
         for path in self._segment_paths:
             for event in EventLog(path, clock=self._clock).read_all():
                 if event.prev_hash != expected_prev:
                     return False
                 expected_prev = _hash_of(event)
+                count += 1
+
+        # Forward links alone cannot detect a truncated tail -- see
+        # _write_head. A workspace written before the anchor existed has no
+        # HEAD file; it stays verifiable on links alone rather than being
+        # reported as corrupt.
+        head = self._read_head()
+        if head is not None:
+            if head.get("count") != count or head.get("head") != expected_prev:
+                return False
         return True

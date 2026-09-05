@@ -183,7 +183,15 @@ class Pipeline:
         self.stats = stats
         self.answer_timeout_s = answer_timeout_s
 
-    def answer(self, query_id: str, entity: str, attribute: str, as_of: datetime, *, now: datetime, k: int = 1) -> Answer:
+    def answer(
+        self, query_id: str, entity: str, attribute: str, as_of: datetime, *,
+        now: datetime, k: int = 1, as_of_class: str | None = None,
+    ) -> Answer:
+        """`as_of_class` is spec §B6's cache-key class for the as_of axis:
+        the caller passes "current" when the request said as_of="now", and
+        leaves it None for a pinned historical instant (which then keys on
+        the instant itself). See the cache_key call below.
+        """
         # Non-LLM latency (spec §A4/§B8: "total non-LLM overhead", explicitly
         # excluding the LLM call, which "is not budgeted here") is measured
         # directly as this method's own wall-clock time MINUS whatever time
@@ -196,12 +204,40 @@ class Pipeline:
         # not just successful serves.
         started = time.perf_counter()
         derive_elapsed_ms = 0.0
+        # A real per-query state, threaded through every route below.
+        #
+        # Every transition() call here used to pass two hardcoded literals
+        # and throw the result away -- transition(ASSERTED, VERIFIED) is a
+        # compile-time constant, so it validated nothing and could never
+        # raise, while the docstring claimed "every pass/fail transition is
+        # validated". With an actual variable, a future edit that serves an
+        # answer without having passed through ASSERTED (i.e. without a
+        # derive and a passing verify) raises IllegalTransitionError instead
+        # of sailing through.
+        #
+        # The projection this Pipeline was built from is already the
+        # INTERPRETED stage, so that is where a query starts. The
+        # pre-assertion abstentions (NO_CANDIDATES, UNSUPPORTED_BY_SOURCE, a
+        # deriver that never returned) deliberately make no transition call:
+        # ABSTAINED is reachable only from ASSERTED, and there is no
+        # assertion to abstain from when retrieval or derivation never
+        # produced one.
+        state = EpistemicState.INTERPRETED
         try:
             if self.stats:
                 self.stats.record_recall()
             query = f"{entity}.{attribute}"
+            # spec §B6 keys on the as_of CLASS, not the instant. Passing
+            # as_of.isoformat() meant the default as_of="now" path -- which
+            # is every ordinary recall -- produced a microsecond-unique key
+            # on every single call, so the route cache could never hit:
+            # five identical recalls all took route="fresh", the cache
+            # accumulated five unreusable entries, and with an LLM deriver
+            # every repeat paid a full model call. The cache_hits /
+            # cache_evicts counters spec §B8 requires were unreachable in
+            # production for the same reason.
             key = cache_key(
-                query, as_of.isoformat(),
+                query, as_of_class or as_of.isoformat(),
                 {self.projection_version.projection: self.projection_version.version},
                 self.verifier.truth_version,
             )
@@ -211,18 +247,30 @@ class Pipeline:
             if cached is not None:
                 result = self._verify_and_log(cached.assertion, as_of, now)
                 if result.status == "pass":
-                    transition(EpistemicState.ASSERTED, EpistemicState.VERIFIED)  # then REINFORCED, VERIFIED's only legal next state
+                    cache_state = transition(state, EpistemicState.RETRIEVED)
+                    cache_state = transition(cache_state, EpistemicState.ASSERTED)
+                    transition(cache_state, EpistemicState.VERIFIED)  # then REINFORCED, VERIFIED's only legal next state
                     self.ledger.reward_pass(cached.assertion.citations, bonus=self.pass_bonus, now=now)
                     self.cache.touch(key, now=now)
                     if self.stats:
                         self.stats.record_cache_hit()
-                    return self._served(cached.assertion, as_of, route="cache", truth_version=result.truth_version)
+                    return self._served(
+                        cached.assertion, as_of, route="cache",
+                        truth_version=result.truth_version, excluded=cached.excluded,
+                    )
                 self.cache.evict(key)  # invalidated by verification, never TTL
                 if self.stats:
                     self.stats.record_cache_evict()
                 # fall through to fresh derivation
 
-            retrieval = retrieve_current_fact(entity, attribute, as_of, self.view, self.events_by_id, k=k)
+            # Feed skuld's accumulated weights into ranking -- the read
+            # side of the outcome loop, which had no reader at all.
+            chain = self.view.chains.get(f"{entity}::{attribute}", [])
+            importance = {eid: self.ledger.importance(eid) for eid in chain}
+            retrieval = retrieve_current_fact(
+                entity, attribute, as_of, self.view, self.events_by_id, k=k, importance=importance
+            )
+            state = transition(state, EpistemicState.RETRIEVED)
             if not retrieval.candidates:
                 return self._abstain(query_id, ["NO_CANDIDATES"], retrieval.excluded, as_of, truth_version=None, now=now)
 
@@ -246,24 +294,47 @@ class Pipeline:
                 return self._abstain(query_id, [exc.reason], retrieval.excluded, as_of, truth_version=None, now=now)
             except VerifyTimeoutError:
                 return self._abstain(query_id, ["VERIFY_TIMEOUT"], retrieval.excluded, as_of, truth_version=None, now=now)
+            except Exception:
+                # spec §A4 P3: a deriver failure is NEVER a protocol
+                # violation -- it abstains. Catching only DeriverFailure
+                # here trusted every Deriver implementation to map all of
+                # its own failure modes into the taxonomy, and the shipped
+                # one does not: huginn_llm maps APITimeoutError and nothing
+                # else, so a 429/5xx/401/connection drop from the provider,
+                # or a model returning a non-string claim, propagated out
+                # of answer() and out of the MCP recall tool as a raw SDK
+                # traceback. Worse than the crash, it escaped _abstain(),
+                # so no outcome.abstention event was appended and no stat
+                # was bumped -- the failed read was invisible to both log
+                # replay and check_action_tool. A deriver is untrusted code
+                # at the edge of the system; treat any escape as a failure
+                # to derive.
+                return self._abstain(query_id, ["DERIVATION_FAILED"], retrieval.excluded, as_of, truth_version=None, now=now)
             finally:
                 derive_elapsed_ms += (time.perf_counter() - derive_started) * 1000
             self._record_deriver_stats(assertion)
+            state = transition(state, EpistemicState.ASSERTED)
             result = self._verify_and_log(assertion, as_of, now)
             if result.status == "pass":
-                transition(EpistemicState.ASSERTED, EpistemicState.VERIFIED)  # then REINFORCED, VERIFIED's only legal next state
+                transition(state, EpistemicState.VERIFIED)  # then REINFORCED, VERIFIED's only legal next state
                 self.ledger.reward_pass(assertion.citations, bonus=self.pass_bonus, now=now)
-                self.cache.put(key, assertion, now=now)
+                self.cache.put(key, assertion, now=now, excluded=retrieval.excluded)
                 return self._served(assertion, as_of, route="fresh", truth_version=result.truth_version, excluded=retrieval.excluded)
 
             # -- exactly one re-derivation (T3), pre-filtered by V2+V3 --
             bad_ids = {f.citation for f in result.failures}
+            # Filter from `supported`, not `retrieval.candidates`: rebuilding
+            # from the raw list silently re-admitted the self-contradictory
+            # candidates that were deliberately withheld from the first
+            # derive, and Heimdall.verify() never re-checks self_supported --
+            # so a fact whose own source text contradicts its value could be
+            # cited on the retry and pass V1-V4 clean.
             valid = [
-                c for c in retrieval.candidates
+                c for c in supported
                 if c.event_id not in bad_ids and self.verifier.would_pass_validity(c.event_id, as_of)
             ]
             if not valid:
-                transition(EpistemicState.ASSERTED, EpistemicState.ABSTAINED)
+                transition(state, EpistemicState.ABSTAINED)
                 return self._abstain(query_id, [f.code for f in result.failures], retrieval.excluded, as_of, truth_version=result.truth_version, now=now)
 
             if self.stats:
@@ -275,17 +346,33 @@ class Pipeline:
                 return self._abstain(query_id, [exc.reason], retrieval.excluded, as_of, truth_version=None, now=now)
             except VerifyTimeoutError:
                 return self._abstain(query_id, ["VERIFY_TIMEOUT"], retrieval.excluded, as_of, truth_version=None, now=now)
+            except Exception:
+                # spec §A4 P3: a deriver failure is NEVER a protocol
+                # violation -- it abstains. Catching only DeriverFailure
+                # here trusted every Deriver implementation to map all of
+                # its own failure modes into the taxonomy, and the shipped
+                # one does not: huginn_llm maps APITimeoutError and nothing
+                # else, so a 429/5xx/401/connection drop from the provider,
+                # or a model returning a non-string claim, propagated out
+                # of answer() and out of the MCP recall tool as a raw SDK
+                # traceback. Worse than the crash, it escaped _abstain(),
+                # so no outcome.abstention event was appended and no stat
+                # was bumped -- the failed read was invisible to both log
+                # replay and check_action_tool. A deriver is untrusted code
+                # at the edge of the system; treat any escape as a failure
+                # to derive.
+                return self._abstain(query_id, ["DERIVATION_FAILED"], retrieval.excluded, as_of, truth_version=None, now=now)
             finally:
                 derive_elapsed_ms += (time.perf_counter() - derive2_started) * 1000
             self._record_deriver_stats(assertion2)
             result2 = self._verify_and_log(assertion2, as_of, now)
             if result2.status == "pass":
-                transition(EpistemicState.ASSERTED, EpistemicState.VERIFIED)  # then REINFORCED, VERIFIED's only legal next state
+                transition(state, EpistemicState.VERIFIED)  # then REINFORCED, VERIFIED's only legal next state
                 self.ledger.reward_pass(assertion2.citations, bonus=self.pass_bonus, now=now)
-                self.cache.put(key, assertion2, now=now)
+                self.cache.put(key, assertion2, now=now, excluded=retrieval.excluded)
                 return self._served(assertion2, as_of, route="rederived", truth_version=result2.truth_version, excluded=retrieval.excluded)
 
-            transition(EpistemicState.ASSERTED, EpistemicState.ABSTAINED)
+            transition(state, EpistemicState.ABSTAINED)
             return self._abstain(query_id, [f.code for f in result2.failures], retrieval.excluded, as_of, truth_version=result2.truth_version, now=now)
         finally:
             if self.stats:

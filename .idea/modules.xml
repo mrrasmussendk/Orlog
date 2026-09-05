@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/Orlog.iml" filepath="$PROJECT_DIR$/.idea/Orlog.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/orlog.iml" filepath="$PROJECT_DIR$/.idea/orlog.iml" />
     </modules>
   </component>
 </project>

@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator, NoReturn
@@ -46,7 +47,7 @@ from typing import Callable, Iterator, NoReturn
 from pydantic import ValidationError
 from ulid import ULID
 
-from orlog.errors import SchemaError
+from orlog.errors import SchemaError, StorageError
 from orlog.models.event import Event, EventDraft
 
 
@@ -114,20 +115,59 @@ class EventLog:
         except ValidationError as exc:
             raise SchemaError(str(exc)) from exc
 
+        # flush + fsync before returning: append() is the durability
+        # boundary of an "append-only, tamper-evident" log, and without this
+        # a crash between the write and the OS flushing its page cache loses
+        # an event that append() already reported as committed. The fsync
+        # cost is one per remember(), which is the right trade for a log
+        # whose whole value proposition is that what it accepted is still
+        # there afterwards.
         with self.path.open("a", encoding="utf-8") as f:
             f.write(event.model_dump_json() + "\n")
+            f.flush()
+            os.fsync(f.fileno())
         self._last_hash = _hash_of(event)
         return event
 
     def read_all(self) -> list[Event]:
-        """Return every Event ever appended, in append order."""
+        """Return every Event ever appended, in append order.
+
+        A torn FINAL line -- the partial record a crash mid-write leaves
+        behind -- is reported as a typed StorageError naming the segment,
+        not as a raw json.JSONDecodeError. The distinction matters because
+        __init__ calls this (via _compute_last_hash): an unhandled decode
+        error there made the whole workspace unopenable, so Runtime,
+        `orlog replay` and `orlog inspect` all died with a traceback on a
+        log whose every complete event was still perfectly readable.
+
+        A malformed line anywhere EARLIER is not recoverable damage of the
+        same kind -- it means the file was rewritten, not interrupted -- so
+        it stays an error too, just a differently-worded one.
+        """
         text = self.path.read_text(encoding="utf-8")
+        lines = [line for line in text.splitlines() if line.strip()]
         events = []
-        for line in text.splitlines():
-            if not line.strip():
-                continue
-            events.append(Event.model_validate(json.loads(line)))
+        for i, line in enumerate(lines):
+            try:
+                events.append(Event.model_validate(json.loads(line)))
+            except (json.JSONDecodeError, ValidationError) as exc:
+                if i == len(lines) - 1:
+                    where = "final"
+                    hint = (
+                        "A partial trailing record is what an interrupted append leaves behind; "
+                        "the preceding events are intact and `orlog replay` can rebuild from them "
+                        "once it is removed."
+                    )
+                else:
+                    where = f"line {i + 1} of {len(lines)}"
+                    hint = "The log has been modified in place."
+                raise StorageError(
+                    f"{self.path}: {where} record is unreadable "
+                    f"({exc.__class__.__name__}). {hint}"
+                ) from exc
         return events
+
+
 
     def read(self, since: str | None = None, until: str | None = None) -> Iterator[Event]:
         """Yield events with id in [since, until] (inclusive). ULIDs sort
@@ -175,3 +215,24 @@ class EventLog:
             "EventLog is append-only: events cannot be deleted. "
             "See DESIGN-PRINCIPLES.md principle 1."
         )
+
+
+def read_intact_events(path: Path | str) -> list[Event]:
+    """Every event in `path` up to the first unreadable one.
+
+    A salvage path, deliberately NOT a method: EventLog.__init__ reads the
+    log to compute its chain head, so it raises on a torn file and no
+    instance can be constructed over one. Refusing to open damaged storage
+    is the right default -- appending to a log with a torn record in it
+    would bury the damage mid-file -- but recovering the intact prefix
+    still has to be possible.
+    """
+    events: list[Event] = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            events.append(Event.model_validate(json.loads(line)))
+        except (json.JSONDecodeError, ValidationError):
+            break
+    return events

@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from collections import deque
 from typing import Any, TextIO
 
 
@@ -43,10 +44,18 @@ class StructuredLogger:
         self._stream.flush()
 
 
-def _percentile(samples: list[float], p: float) -> float | None:
-    if not samples:
+#: How many recent latency samples to keep for p50/p95. A trailing
+#: window, not the whole history: see Stats.record_latency_ms.
+LATENCY_SAMPLE_WINDOW = 10_000
+
+
+def _percentile(ordered: list[float], p: float) -> float | None:
+    """`ordered` must already be sorted ascending -- snapshot() sorts once
+    and reads several percentiles off the result, rather than re-sorting
+    the whole sample window for each one.
+    """
+    if not ordered:
         return None
-    ordered = sorted(samples)
     index = min(len(ordered) - 1, int(round(p * (len(ordered) - 1))))
     return ordered[index]
 
@@ -63,7 +72,7 @@ class Stats:
         self._abstentions_by_reason: dict[str, int] = {}
         self._tokens_in = 0
         self._tokens_out = 0
-        self._latency_samples_ms: list[float] = []
+        self._latency_samples_ms: deque[float] = deque(maxlen=LATENCY_SAMPLE_WINDOW)
 
     def record_append(self) -> None:
         self.appends += 1
@@ -97,9 +106,17 @@ class Stats:
             self._tokens_out += tokens.get("out", 0)
 
     def record_latency_ms(self, latency_ms: float) -> None:
+        # Bounded, because `orlog serve` is a long-lived process and this
+        # gets one float per recall forever. An unbounded list grew without
+        # limit for the life of the server AND made every stats read
+        # progressively slower, since snapshot() sorts the whole thing twice
+        # (once each for p50 and p95). A trailing window is also the more
+        # useful statistic: recent latency, not a lifetime average that
+        # can never move.
         self._latency_samples_ms.append(latency_ms)
 
     def snapshot(self) -> dict[str, Any]:
+        latencies = sorted(self._latency_samples_ms)  # sorted once, not once per percentile
         return {
             "appends": self.appends,
             "recalls": self.recalls,
@@ -109,6 +126,6 @@ class Stats:
             "abstentions": {"by_reason": dict(self._abstentions_by_reason)},
             "rederivations": self.rederivations,
             "tokens": {"in": self._tokens_in, "out": self._tokens_out},
-            "p50_ms": _percentile(self._latency_samples_ms, 0.50),
-            "p95_ms": _percentile(self._latency_samples_ms, 0.95),
+            "p50_ms": _percentile(latencies, 0.50),
+            "p95_ms": _percentile(latencies, 0.95),
         }

@@ -16,16 +16,33 @@ The four checks (V1-V4) run in the order spec §4.5 gives, because it matters:
 V1 is checked before any per-citation loop, since an empty citations list
 would otherwise pass every per-citation check vacuously.
 
-V4 (SUPPORTS) checks that the claim mentions BOTH the cited fact's own
-"{entity}.{attribute}" key AND its value -- not just the value alone. A
-value-only check has a real gap: if a projection mis-groups chains (cell C3),
-retrieval can hand back a candidate that is really a DIFFERENT entity's fact
--- still a real, currently-valid citation, so V2 and V3 both pass. Checking
-only "does the value appear in the claim" would then also pass, since the
-claim was built from that same (wrong) fact's real value -- serving a
-confidently wrong answer. Requiring the fact's own key to appear too catches
-this, because a claim about "user:0.plan" naming a citation whose ground
-truth says "user:1.plan" can never satisfy both halves.
+V4 (SUPPORTS) requires the claim to BE the cited fact, in the canonical
+"{entity}.{attribute} = {value}" shape both derivers are contracted to emit
+(huginn.ScriptedDeriver builds it directly; huginn_llm's SYSTEM_PROMPT
+mandates it). It is an exact match on each half after whitespace/case
+normalization -- deliberately NOT substring containment.
+
+Containment was the original implementation and it was unsound in two
+separate ways, both of which let a claim through the gate that the cited
+fact did not support:
+
+1. A value is a substring of longer, different values. Ground truth
+   "user:1.plan = Pro" would verify the claim "user:1.plan = Professional
+   Enterprise (unlimited seats), renewing 2027-01-01". Numerically it is
+   worse: value "5" is contained in "500", value "0" in "1000", and a bare
+   digit from the entity name ("user:1") satisfies a claim of "9999". The
+   key half was equally porous -- key "user:1.plan" is a substring of a
+   claim about "user:1.plan_renewal".
+2. Containment constrains only what the claim CONTAINS, never what else it
+   says. "user:1.plan = pro" is contained in "user:1.plan is not pro" and in
+   "user:1.plan = pro, and user:1.card = 4111-1111-1111-1111" -- so a
+   negation, or an arbitrary hallucinated rider, shipped under VERIFIED.
+
+Requiring equality closes both: anything the deriver adds, negates, or
+substitutes changes one of the two normalized halves and fails the check.
+The C3 mis-grouping defense the key half was added for still holds a
+fortiori -- a claim about "user:0.plan" cannot equal a ground truth keyed
+"user:1.plan".
 """
 
 from __future__ import annotations
@@ -40,6 +57,34 @@ from orlog.models.event import Event
 from orlog.verdandi import OPEN_VALID_TO
 
 UNCITED = "<uncited>"
+
+#: Separator between the key and value halves of a canonical claim. Both
+#: derivers emit exactly this (huginn.py's f"{query} = {best.content}" and
+#: huginn_llm.py's SYSTEM_PROMPT), so V4 can split on it rather than guess.
+CLAIM_SEP = "="
+
+
+def _normalize(text: str) -> str:
+    """Fold the incidental variation a deriver can introduce -- surrounding
+    and repeated whitespace, letter case -- without folding anything that
+    changes meaning. Used on both halves of a claim before comparing them
+    to ground truth, so "user:1.plan  =  PRO" still verifies against
+    "pro" while "not pro" and "professional" do not.
+    """
+    return " ".join(text.split()).casefold()
+
+
+def claim_supports(claim: str, key: str, value: str) -> bool:
+    """True when `claim` is exactly the canonical assertion of `key = value`.
+
+    Split on the FIRST separator only: a value is free to contain "="
+    (a base64 token, a query string) and must survive the round trip, whereas
+    a key -- "{entity}.{attribute}" -- never contains one.
+    """
+    claim_key, sep, claim_value = claim.partition(CLAIM_SEP)
+    if not sep:
+        return False
+    return _normalize(claim_key) == _normalize(key) and _normalize(claim_value) == _normalize(value)
 
 
 class GroundTruthFact(BaseModel):
@@ -202,10 +247,10 @@ class Heimdall:
                 )
                 continue
 
-            # V4 SUPPORTS -- the claim must name both the fact's own key
-            # (entity.attribute) and its value; see module docstring for why
-            # value-alone is not enough.
-            if fact.key not in assertion.claim or fact.value not in assertion.claim:
+            # V4 SUPPORTS -- the claim must BE this fact, in the canonical
+            # "key = value" shape, not merely contain its key and value; see
+            # the module docstring for the two unsoundnesses containment had.
+            if not claim_supports(assertion.claim, fact.key, fact.value):
                 failures.append(
                     VerificationFailure(
                         citation=citation,

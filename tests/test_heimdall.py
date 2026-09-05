@@ -102,3 +102,111 @@ def test_would_pass_validity_matches_v2_plus_v3():
     assert verifier.would_pass_validity("ev-1", T2) is False  # expired
     assert verifier.would_pass_validity("ev-2", T1) is False  # not yet valid
     assert verifier.would_pass_validity("nonexistent", T2) is False
+
+
+# --- V4 is an exact match, not containment -------------------------------
+#
+# Both of the following were VERIFIED by the original substring
+# implementation (`fact.value not in assertion.claim`). They are the reason
+# V4 now compares normalized halves for equality.
+
+
+def test_v4_rejects_a_longer_value_that_merely_contains_the_cited_one():
+    # TRUTH's ev-2 is "pro". "professional" contains it, but says something
+    # materially different -- and an LLM deriver embellishing a plan name is
+    # exactly how this reaches the gate in production.
+    verifier = Heimdall(TRUTH, truth_version="t1")
+    result = verifier.verify(
+        _assertion(claim="user:1.plan = professional enterprise (unlimited seats)", citations=["ev-2"]),
+        T2,
+        checked_at=CHECKED_AT,
+    )
+
+    assert result.status == "fail"
+    assert result.failures[0].code == "UNSUPPORTED"
+
+
+def test_v4_rejects_a_numeric_value_that_is_a_substring_of_the_claimed_one():
+    # The numeric case is the dangerous one: every short number is a
+    # substring of longer ones, so "5" would verify a claim of "500".
+    truth = {
+        "ev-n": GroundTruthFact(
+            fact_id="ev-n", entity="acct:7", attribute="balance", value="5",
+            valid_from=T1, valid_to=datetime(9999, 12, 31, tzinfo=timezone.utc),
+        )
+    }
+    verifier = Heimdall(truth, truth_version="t1")
+
+    assert verifier.verify(_assertion(claim="acct:7.balance = 500", citations=["ev-n"]), T2, checked_at=CHECKED_AT).status == "fail"
+    assert verifier.verify(_assertion(claim="acct:7.balance = 5", citations=["ev-n"]), T2, checked_at=CHECKED_AT).status == "pass"
+
+
+def test_v4_rejects_a_negated_claim_built_from_the_cited_value():
+    # Containment cannot see negation: "user:1.plan = pro" is a substring of
+    # "user:1.plan is not pro", so the gate passed the exact opposite of the
+    # fact it was citing.
+    verifier = Heimdall(TRUTH, truth_version="t1")
+    result = verifier.verify(_assertion(claim="user:1.plan is not pro", citations=["ev-2"]), T2, checked_at=CHECKED_AT)
+
+    assert result.status == "fail"
+    assert result.failures[0].code == "UNSUPPORTED"
+
+
+def test_v4_rejects_a_supported_claim_carrying_an_unsupported_rider():
+    # The cited half is true; everything after the comma is invented and
+    # nothing in the log supports it. Serving this as VERIFIED is how an
+    # unverified card number reaches a consuming agent.
+    verifier = Heimdall(TRUTH, truth_version="t1")
+    result = verifier.verify(
+        _assertion(claim="user:1.plan = pro, and user:1.card = 4111-1111-1111-1111", citations=["ev-2"]),
+        T2,
+        checked_at=CHECKED_AT,
+    )
+
+    assert result.status == "fail"
+    assert result.failures[0].code == "UNSUPPORTED"
+
+
+def test_v4_rejects_a_key_that_the_cited_key_is_a_prefix_of():
+    # "user:1.plan" is a substring of "user:1.plan_renewal", so the key half
+    # of the old check was as porous as the value half.
+    verifier = Heimdall(TRUTH, truth_version="t1")
+    result = verifier.verify(_assertion(claim="user:1.plan_renewal = pro", citations=["ev-2"]), T2, checked_at=CHECKED_AT)
+
+    assert result.status == "fail"
+    assert result.failures[0].code == "UNSUPPORTED"
+
+
+def test_v4_still_tolerates_case_and_whitespace_drift():
+    # Tightening V4 must not make it brittle: a deriver that varies case or
+    # spacing around the separator is saying the same thing, and should
+    # still verify rather than abstain.
+    verifier = Heimdall(TRUTH, truth_version="t1")
+
+    for claim in ("user:1.plan = PRO", "user:1.plan  =  pro", "  user:1.plan = pro  "):
+        assert verifier.verify(_assertion(claim=claim, citations=["ev-2"]), T2, checked_at=CHECKED_AT).status == "pass"
+
+
+def test_v4_preserves_a_value_containing_the_separator():
+    # Splitting on the first "=" only: a value may legitimately contain one
+    # (a padded token, a query string) and must survive the round trip.
+    truth = {
+        "ev-t": GroundTruthFact(
+            fact_id="ev-t", entity="user:1", attribute="token", value="YWJjZA==",
+            valid_from=T1, valid_to=datetime(9999, 12, 31, tzinfo=timezone.utc),
+        )
+    }
+    verifier = Heimdall(truth, truth_version="t1")
+
+    assert verifier.verify(_assertion(claim="user:1.token = YWJjZA==", citations=["ev-t"]), T2, checked_at=CHECKED_AT).status == "pass"
+    assert verifier.verify(_assertion(claim="user:1.token = YWJjZA==X", citations=["ev-t"]), T2, checked_at=CHECKED_AT).status == "fail"
+
+
+def test_v4_rejects_a_claim_with_no_separator_at_all():
+    # Prose that never states "key = value" cannot be checked against ground
+    # truth, so it must fail closed rather than fall through.
+    verifier = Heimdall(TRUTH, truth_version="t1")
+    result = verifier.verify(_assertion(claim="the user is on the pro plan", citations=["ev-2"]), T2, checked_at=CHECKED_AT)
+
+    assert result.status == "fail"
+    assert result.failures[0].code == "UNSUPPORTED"

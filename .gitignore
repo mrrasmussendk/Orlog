@@ -8,3 +8,4 @@ conformance-report.json
 build/
 dist/
 *.spec.bak
+.env

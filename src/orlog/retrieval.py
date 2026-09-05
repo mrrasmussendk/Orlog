@@ -58,6 +58,7 @@ def retrieve_current_fact(
     events_by_id: dict[str, Event],
     *,
     k: int = 1,
+    importance: dict[str, float] | None = None,
 ) -> RetrievalResult:
     """Return the candidate(s) for (entity, attribute) whose validity window
     contains `as_of`, most-recent first, plus honest exclusion counts.
@@ -65,6 +66,14 @@ def retrieve_current_fact(
     By construction, verdandi's windows partition time per chain, so at most
     one candidate should ever be "in window" for a given as_of -- but this
     function doesn't assume that; it just filters and ranks.
+
+    `importance` is skuld's outcome-derived weight per event id (spec §B3's
+    "score ... times importance"). It used to be hardcoded to 1.0 here,
+    which quietly disconnected the whole L5 adaptation loop: skuld wrote
+    reward_pass/decay weights to SQLite that no read path ever consulted,
+    so a fact verified a hundred times ranked exactly the same as one
+    decayed to the floor. Absent or unknown ids default to 1.0, so an
+    un-rewarded workspace behaves exactly as before.
     """
     key = f"{entity}::{attribute}"
     chain = view.chains.get(key, [])
@@ -78,8 +87,14 @@ def retrieve_current_fact(
         else:
             by_validity_excluded += 1
 
-    # Most-recent-first, in case more than one window somehow contains as_of.
-    in_window.sort(key=lambda eid: view.windows[eid].valid_from, reverse=True)
+    # Most-recent-first, in case more than one window somehow contains as_of;
+    # importance breaks the tie ahead of recency, so a repeatedly-verified
+    # fact outranks a fresher but never-corroborated one. Deterministic to
+    # the event id at the bottom, so equal weights never reorder run to run.
+    weights = importance or {}
+    in_window.sort(
+        key=lambda eid: (-weights.get(eid, 1.0), -view.windows[eid].valid_from.timestamp(), eid)
+    )
 
     candidates = [
         Candidate(
@@ -88,7 +103,7 @@ def retrieve_current_fact(
             valid_from=view.windows[event_id].valid_from,
             valid_to=view.windows[event_id].valid_to,
             score=1.0,
-            importance=1.0,
+            importance=weights.get(event_id, 1.0),
             excerpt=events_by_id[event_id].payload.get("evidence_span") or events_by_id[event_id].payload.get("text"),
         )
         for event_id in in_window[:k]

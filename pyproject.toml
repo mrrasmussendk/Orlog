@@ -47,6 +47,12 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# The spec ships WITH the package: server.py serves it as the orlog://spec
+# MCP resource, and resolving it relative to the source tree meant that
+# resource was empty for every install that wasn't a git checkout.
+[tool.setuptools.package-data]
+orlog = ["spec_data/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["-m", "not integration"]

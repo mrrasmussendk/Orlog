@@ -110,16 +110,50 @@ class Workspace:
         was killed, or the machine rebooted -- and gets reclaimed rather
         than blocking forever.
         """
-        if self.lock_path.exists():
-            holder = self.lock_path.read_text(encoding="utf-8").strip()
-            try:
-                holder_pid = int(holder)
-            except ValueError:
-                holder_pid = None
-            if holder_pid is not None and _pid_alive(holder_pid):
-                raise LockedError(f"workspace already locked by pid {holder} ({self.lock_path})")
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.lock_path.write_text(str(os.getpid()), encoding="utf-8")
+        # O_CREAT|O_EXCL is the whole lock: the check and the claim are one
+        # atomic syscall. The previous exists()-then-write_text() left a
+        # window between the two in which both of two processes starting
+        # together saw no lock, both wrote, and the second silently
+        # overwrote the first's pid -- so both believed they held it, and
+        # each one's release_lock() then unlinked the other's.
+        try:
+            fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            if not self._reclaim_if_stale():
+                holder = self._holder_text()
+                raise LockedError(f"workspace already locked by pid {holder} ({self.lock_path})") from None
+            # The stale lock is gone; claim it, still atomically. Losing the
+            # race here means someone else got there first, which is a
+            # legitimate E_LOCKED rather than something to retry around.
+            try:
+                fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            except FileExistsError:
+                holder = self._holder_text()
+                raise LockedError(f"workspace already locked by pid {holder} ({self.lock_path})") from None
+        with os.fdopen(fd, "w") as f:
+            f.write(str(os.getpid()))
+
+    def _holder_text(self) -> str:
+        try:
+            return self.lock_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return "<unreadable>"
+
+    def _reclaim_if_stale(self) -> bool:
+        """Remove the lock if its recorded pid is not running. True if it
+        was reclaimed (the previous holder crashed, was killed, or the
+        machine rebooted), False if a live process still holds it.
+        """
+        holder = self._holder_text()
+        try:
+            holder_pid = int(holder)
+        except ValueError:
+            holder_pid = None  # not a parseable pid -- treat as stale
+        if holder_pid is not None and _pid_alive(holder_pid):
+            return False
+        self.lock_path.unlink(missing_ok=True)
+        return True
 
     def release_lock(self) -> None:
         self.lock_path.unlink(missing_ok=True)

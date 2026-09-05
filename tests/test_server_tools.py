@@ -128,7 +128,7 @@ def test_recall_tool_passes_and_cites_the_evidence_span_for_a_paraphrased_value(
     remember_tool(
         runtime, "Marc adores the city of Porto lately.", occurred_at=T1,
         entity="marc", attribute="likes", value="loves Porto",
-        evidence_span="adores the city of Porto",
+        evidence_span="adores the city of Porto", paraphrased_value=True,
     )
 
     result = recall_tool(runtime, "marc.likes", as_of=T2)
@@ -496,9 +496,25 @@ def test_register_new_attribute_for_an_already_known_type(tmp_path):
     rt.close()
 
 
-def test_invalid_occurred_at_string_raises_a_clear_value_error(runtime):
-    with pytest.raises(ValueError):
+def test_invalid_occurred_at_string_raises_a_clear_schema_error(runtime):
+    # E_SCHEMA, the same taxonomy every other bad-input rejection in
+    # remember() uses -- not a bare ValueError. server.py's header promises
+    # tool errors map to abstentions or the closed taxonomy, and a raw
+    # ValueError was in neither.
+    with pytest.raises(SchemaError):
         remember_tool(runtime, text="x", occurred_at="not-a-date", entity="e", attribute="a", value="v")
+
+
+def test_invalid_as_of_string_raises_a_clear_schema_error(runtime):
+    # "yesterday" is a realistic thing for an LLM caller to send for a
+    # parameter documented as "the instant you are asking about"; it used
+    # to escape as a raw ValueError from datetime.fromisoformat.
+    for bad in ("yesterday", "", "2026-13-99"):
+        with pytest.raises(SchemaError):
+            recall_tool(runtime, "user:1.plan", as_of=bad)
+
+    with pytest.raises(SchemaError):
+        recall_tool(runtime, "user:1.plan", known_as_of="not-a-date")
 
 
 def test_recall_query_with_more_than_one_dot_splits_on_the_last_one(runtime):

@@ -29,9 +29,10 @@ class _FakeAnthropicUsage:
 
 
 class _FakeAnthropicResponse:
-    def __init__(self, content, usage):
+    def __init__(self, content, usage, stop_reason="end_turn"):
         self.content = content
         self.usage = usage
+        self.stop_reason = stop_reason
 
 
 class _FakeAnthropicMessages:
@@ -89,15 +90,69 @@ def test_anthropic_completion_passes_temperature_zero_and_the_configured_model(m
     fake_client = _FakeAnthropicClient(response=response)
     _install_fake_anthropic_client(monkeypatch, fake_client)
 
-    completion = AnthropicCompletion(model="claude-test")
+    # orlog's default model, and one that still accepts a sampling param.
+    completion = AnthropicCompletion(model="claude-haiku-4-5")
     completion("sys", "user", max_tokens=42)
 
     call = fake_client.messages.calls[0]
-    assert call["model"] == "claude-test"
-    assert call["temperature"] == 0
+    assert call["model"] == "claude-haiku-4-5"
+    # extra_body, not a named kwarg -- see AnthropicCompletion.__call__.
+    assert call["extra_body"] == {"temperature": 0}
     assert call["max_tokens"] == 42
     assert call["system"] == "sys"
     assert call["messages"] == [{"role": "user", "content": "user"}]
+
+
+def test_anthropic_completion_omits_temperature_on_models_that_reject_sampling_params(monkeypatch):
+    # The reasoning generations removed sampling control and 400 on
+    # `temperature`. Sending it anyway -- which the extra_body escape hatch
+    # did unconditionally -- would fail EVERY derive for anyone who
+    # configured one of these in orlog.toml, since DeriverConfig.model is
+    # free-form.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    for model in ("claude-opus-5", "claude-sonnet-5", "claude-opus-4-7", "claude-fable-5-1"):
+        response = _FakeAnthropicResponse(content=[_FakeAnthropicBlock("text", "x")], usage=_FakeAnthropicUsage(1, 1))
+        fake_client = _FakeAnthropicClient(response=response)
+        _install_fake_anthropic_client(monkeypatch, fake_client)
+
+        AnthropicCompletion(model=model)("sys", "user", max_tokens=42)
+
+        assert fake_client.messages.calls[0]["extra_body"] == {}, model
+
+
+def test_anthropic_completion_omits_temperature_for_an_unrecognized_model(monkeypatch):
+    # Unknown model ids default to omitting it: a model that would have
+    # accepted temperature loses only a little determinism, whereas one that
+    # rejects it 400s every single call.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    response = _FakeAnthropicResponse(content=[_FakeAnthropicBlock("text", "x")], usage=_FakeAnthropicUsage(1, 1))
+    fake_client = _FakeAnthropicClient(response=response)
+    _install_fake_anthropic_client(monkeypatch, fake_client)
+
+    AnthropicCompletion(model="some-model-released-next-year")("sys", "user", max_tokens=42)
+
+    assert fake_client.messages.calls[0]["extra_body"] == {}
+
+
+def test_anthropic_completion_reports_a_max_tokens_truncation_instead_of_parsing_it(monkeypatch):
+    # A truncated response is an incomplete JSON object. Treated as a normal
+    # answer it failed to parse, burned the one repair retry at the same
+    # cap, truncated identically, and abstained with a reason that named
+    # JSON validity rather than the actual cause.
+    from orlog.huginn import DeriverTruncated
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    response = _FakeAnthropicResponse(
+        content=[_FakeAnthropicBlock("text", '{"claim": "user:1.plan = pr')],
+        usage=_FakeAnthropicUsage(10, 42),
+        stop_reason="max_tokens",
+    )
+    fake_client = _FakeAnthropicClient(response=response)
+    _install_fake_anthropic_client(monkeypatch, fake_client)
+
+    with pytest.raises(DeriverTruncated):
+        AnthropicCompletion(model="claude-haiku-4-5")("sys", "user", max_tokens=42)
 
 
 def test_anthropic_completion_converts_the_providers_timeout_into_a_plain_timeouterror(monkeypatch):
@@ -122,8 +177,9 @@ class _FakeOpenAIMessage:
 
 
 class _FakeOpenAIChoice:
-    def __init__(self, content):
+    def __init__(self, content, finish_reason="stop"):
         self.message = _FakeOpenAIMessage(content)
+        self.finish_reason = finish_reason
 
 
 class _FakeOpenAIUsage:
@@ -133,8 +189,8 @@ class _FakeOpenAIUsage:
 
 
 class _FakeOpenAIResponse:
-    def __init__(self, content, usage):
-        self.choices = [_FakeOpenAIChoice(content)]
+    def __init__(self, content, usage, finish_reason="stop"):
+        self.choices = [_FakeOpenAIChoice(content, finish_reason)]
         self.usage = usage
 
 
@@ -196,3 +252,15 @@ def test_openai_completion_converts_the_providers_timeout_into_a_plain_timeouter
     completion = OpenAICompletion(model="test-model")
     with pytest.raises(TimeoutError):
         completion("sys", "user", max_tokens=10)
+
+
+def test_openai_completion_reports_a_length_truncation_instead_of_parsing_it(monkeypatch):
+    from orlog.huginn import DeriverTruncated
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    response = _FakeOpenAIResponse(content='{"claim": "user:1.pl', usage=_FakeOpenAIUsage(7, 3), finish_reason="length")
+    fake_client = _FakeOpenAIClient(response=response)
+    _install_fake_openai_client(monkeypatch, fake_client)
+
+    with pytest.raises(DeriverTruncated):
+        OpenAICompletion(model="gpt-test")("sys", "user", max_tokens=50)

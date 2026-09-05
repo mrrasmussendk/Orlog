@@ -41,7 +41,19 @@ from pydantic import BaseModel, ConfigDict
 from orlog.retrieval import Candidate, RetrievalResult
 from orlog.verdandi import SupersessionChainsView
 
-_TOKEN_RE = re.compile(r"[a-z0-9]+")
+# \w with re.UNICODE, not [a-z0-9]: the ASCII-only class silently deleted
+# every non-Latin character, so a query in Cyrillic, Greek, Chinese, Arabic
+# or Hebrew tokenized to the EMPTY set. That made the lexical half of the
+# blended score structurally 0.0 for those queries, capping the total at
+# 0.5 * cosine -- below the default min_confidence for any realistic
+# cosine, so recall() returned NO_CANDIDATES for a perfect semantic match,
+# always, regardless of corpus. Accented Latin was mangled rather than
+# dropped ("Müller" -> {"m", "ller"}), polluting the Jaccard union with
+# single-letter fragments on both sides.
+#
+# The "_" \w also matches is stripped separately below, so snake_cased
+# attributes keep splitting into words the way they did before.
+_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 
 # Excluded from _lexical_score's Jaccard overlap: high-frequency English
 # function words (articles, copulas, auxiliary verbs, question words,
@@ -94,7 +106,15 @@ _STOPWORDS = frozenset({
 
 
 def _tokenize(text: str) -> set[str]:
-    return {t for t in _TOKEN_RE.findall(text.lower()) if t not in _STOPWORDS}
+    # casefold(), not lower(): it folds cases lower() leaves alone (German
+    # "ß" -> "ss", Greek final sigma), so the same word written two ways
+    # matches at index time and query time.
+    tokens = set()
+    for raw in _TOKEN_RE.findall(text.casefold()):
+        for part in raw.split("_"):  # snake_case attributes -> separate words
+            if part and part not in _STOPWORDS:
+                tokens.add(part)
+    return tokens
 
 
 def _lexical_score(query_tokens: set[str], content: str) -> float:
@@ -138,7 +158,15 @@ class HashingEmbedder:
     def _embed_one(self, text: str) -> list[float]:
         vec = [0.0] * self.dim
         text = text.lower()
-        for i in range(max(0, len(text) - 2)):
+        # Pad instead of emitting an all-zero vector. range(len(text) - 2)
+        # yields nothing for text shorter than 3 characters, so values like
+        # "42", "US", "AI" and "Go" embedded to all zeros and scored cosine
+        # 0.0 against every query -- including against themselves -- which
+        # halved their blended score and ranked them below longer, less
+        # relevant values.
+        if len(text) < 3:
+            text = text.ljust(3, "\x00")
+        for i in range(len(text) - 2):
             idx = zlib.crc32(text[i : i + 3].encode("utf-8")) % self.dim
             vec[idx] += 1.0
         return vec

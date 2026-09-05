@@ -21,34 +21,141 @@ before it reaches the world. Agent knowledge moves through an explicit state
 machine instead of an opaque "memory store," so a system built on orlog can
 always say *why* it believes something.
 
-## 60 seconds of orlog
+> **New here?** [`docs/WHAT-IS-ORLOG.md`](docs/WHAT-IS-ORLOG.md) explains the
+> whole idea from scratch, with no jargon and no Norse mythology required.
+> Then come back to [Install](#install) and [Your first 60 seconds](#your-first-60-seconds).
+
+## Is orlog for you?
+
+**Use it if** you are building an agent where a wrong remembered fact is
+expensive — support, billing, compliance, health, anything with an audit
+trail — and you would rather the agent abstain than improvise. You want to
+ask *"what did we believe about this on June 1st, and why?"* and get a real
+answer with citations.
+
+**Don't use it if** you want a fast, fuzzy semantic scratchpad for chat
+context. orlog deliberately spends time verifying every answer (~1s p50 vs.
+~155ms for Mem0 — see [the benchmark](#benchmarked-against-mem0)), and it
+only stores structured facts, not free-form text blobs.
+
+## Install
+
+Python 3.10+ required.
+
+```bash
+git clone https://github.com/mrrasmussendk/Orlog.git
+cd Orlog
+python -m pip install -e ".[anthropic,openai]"
+```
+
+The `anthropic` / `openai` extras are only needed for the real LLM
+extractor. Plain `pip install -e .` is enough to run everything
+deterministically, no API key involved.
+
+Prefer no Python at all? Every tagged release ships a standalone binary —
+see [Standalone binary](#standalone-binary-no-python-required).
+
+## Your first 60 seconds
+
+Two things to know before the code: orlog stores **structured facts**
+shaped `entity` / `attribute` / `value`, and it needs a **vault key** (it
+encrypts the PII it tokenizes out of your text).
 
 ```python
->>> remember_tool(runtime, "Alice's plan is Pro",
-...                entity="user:alice", attribute="plan", value="Pro")
-{"event_id": "01J...9K2"}
+import os
+from orlog.config import OrlogConfig, WorkspaceConfig
+from orlog.runtime import Runtime
+from orlog.server_tools import remember_tool, recall_tool
+from orlog.vault import generate_key
+from orlog.workspace import Workspace
 
->>> recall_tool(runtime, "user:alice.plan")
+os.environ["ORLOG_VAULT_KEY"] = generate_key()   # keep this; you need it to reopen the workspace
+
+runtime = Runtime(
+    Workspace("./myproject"),
+    OrlogConfig(workspace=WorkspaceConfig(name="myproject")),
+)
+
+remember_tool(runtime, "Alice's plan is Pro",
+              entity="user:alice", attribute="plan", value="Pro")
+
+recall_tool(runtime, "user:alice.plan")
+recall_tool(runtime, "user:alice.shoe_size")
+```
+
+The two `recall_tool` calls return, respectively:
+
+```python
 {
-  "verified": true,
-  "claim": "user:alice.plan is Pro",
-  "citations": [{"event_id": "01J...9K2", "excerpt": "Alice's plan is Pro"}],
-  "as_of": "2026-07-15T12:00:00+00:00",
-  "abstained": false
+  "verified": True,
+  "claim": "user:alice.plan = Pro",
+  "citations": [{"event_id": "01M1SBE...SCE", "excerpt": "Pro",
+                 "valid_from": "2026-09-05T17:56:33.922061Z", "valid_to": None,
+                 "recorded_at": "2026-09-05T17:56:33.923818Z"}],
+  "as_of": "2026-09-05T17:56:33.924467Z",
+  "route": "fresh",
+  "truth_version": "windows@01M1SBE...SCE",
+  "abstained": False,
+  "reasons": [],
 }
 
->>> recall_tool(runtime, "user:alice.shoe_size")
 {
-  "verified": false,
-  "claim": null,
-  "abstained": true,
-  "reasons": ["NO_CANDIDATES"]
+  "verified": False,
+  "claim": None,
+  "citations": [],
+  "abstained": True,
+  "reasons": ["NO_CANDIDATES"],
 }
 ```
 
 Nothing gets asserted that can't be traced back to a specific, timestamped
 event. Ask about something orlog never learned, and it tells you so instead
 of inventing an answer.
+
+> `ORLOG_VAULT_KEY` is not stored on disk. Lose it and the encrypted
+> pseudonym registry for that workspace is unrecoverable.
+
+## Use it from Claude Code
+
+orlog speaks MCP, so an agent can call `remember` / `recall` directly.
+One command wires it up:
+
+```bash
+orlog init myproject --claude-code   # scaffolds the workspace AND registers the
+                                     # MCP server (with its vault key) in ~/.claude.json
+```
+
+Restart Claude Code and the `remember`, `recall`, `recall_history`,
+`check_action`, and `stats` tools are available. To do it by hand instead:
+
+```bash
+orlog init myproject          # prints a vault key
+export ORLOG_VAULT_KEY=...    # from the line above
+cd myproject && orlog serve   # MCP stdio server
+```
+
+## The five things to know
+
+1. **Facts are `entity.attribute = value`.** `remember` requires all three
+   together — a text-only memory is rejected, because it would not be
+   retrievable. The free text you pass alongside them is kept as the
+   citation excerpt.
+2. **Every answer is VERIFIED or ABSTAINED.** There is no third outcome, and
+   an abstention always carries machine-readable `reasons`.
+3. **There are two independent clocks.** `as_of` is *valid* time — the
+   instant you are asking about. `known_as_of` is *transaction* time — the
+   instant the answer is allowed to know about, so you can reconstruct what
+   the system believed before a correction landed.
+4. **Nothing is ever deleted or edited.** A change is a new event that
+   supersedes the old one; the old one stays in the log forever. `orlog
+   forget` is the one exception, and even it doesn't rewrite history: it
+   deletes the encrypted pseudonym mapping so the PII tokens left in the log
+   can never be resolved back to a real value (crypto-shredding), and
+   records the erasure as another event.
+5. **The Norse names are just layers.** `urd` = the log, `verdandi` = the
+   current projection, `huginn` = extraction, `heimdall` = the verifier,
+   `muninn` = the cache, `skuld` = the outcome ledger. Full map
+   [below](#the-norse-module-map).
 
 ## Benchmarked against Mem0
 
@@ -136,6 +243,7 @@ API-key-free conformance runs; `LLMDeriver` is the real thing, swapped in via
 ## Layout
 
 ```
+docs/WHAT-IS-ORLOG.md       the no-jargon introduction — start here
 docs/DESIGN-PRINCIPLES.md   design rationale
 docs/ORLOG-SPEC.md          normative protocol v1.0 — source of truth for src/orlog/
 spec/schemas/                JSON Schema contracts for the six layers
@@ -145,25 +253,22 @@ tests/                       one test per contract, plus a unit-test file per mo
 tests/conformance/           C1 supersession, C2 cache staleness, C3 imperfect projection, C4 citation discipline, C5 immutability & replay
 ```
 
-## Running the tests
-
-```
-python -m pip install -e ".[dev,anthropic,openai]"
-pytest
-```
-
-## Using the CLI
+## CLI reference
 
 ```
 orlog init myworkspace          # scaffold a workspace, prints a vault key to export
-export ORLOG_VAULT_KEY=...      # from the line above
-cd myworkspace
+orlog init myworkspace --claude-code   # ...and register it as an MCP server in Claude Code
 orlog serve                     # MCP stdio server
 orlog replay                    # verify the hash chain, rebuild index.sqlite
 orlog inspect <event_id>        # provenance chain
 orlog forget <PSEUDONYM_TOKEN>  # crypto-shred
 orlog conformance               # run tests/conformance/ against this install
 ```
+
+Every command except `conformance` takes an optional workspace path
+(default: the current directory), given last — `orlog inspect <event_id>
+./myworkspace`. The commands that open the vault (`serve`, `forget`) need
+`ORLOG_VAULT_KEY` in the environment; `init` is what generates it.
 
 ## Standalone binary (no Python required)
 
@@ -182,6 +287,17 @@ The binary bundles both the `anthropic` and `openai` extras. The default
 `fastembed` embedder still downloads its model over the network on first
 use (see `orlog.toml`'s `[retrieval] embedder`); everything else works
 fully offline.
+
+## Development
+
+```bash
+python -m pip install -e ".[dev,anthropic,openai]"
+pytest
+```
+
+Tests marked `integration` make real Anthropic API calls and are skipped by
+default; run them with `pytest -m integration` and an `ANTHROPIC_API_KEY`
+set.
 
 ## Known deviations from ORLOG-SPEC.md v1.0
 

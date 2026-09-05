@@ -87,14 +87,56 @@ class PytestVerifier:
         digest = hashlib.sha256(result.stdout.encode("utf-8")).hexdigest()[:12]
         return f"pytest@{digest}"
 
+    @staticmethod
+    def _is_well_formed_test_id(test_id: object) -> bool:
+        """A test id must name a test, and only a test.
+
+        Fact payloads are written by the agent under verification -- the
+        untrusted side this gate exists to police -- and `_run` splices
+        `test_ids` straight into pytest's argv. Without this check a fact
+        can smuggle in options instead of tests and make pytest exit 0
+        having verified nothing: `["--collect-only"]` collects and runs
+        none, and `["test_x.py", "--deselect", "test_x.py::test_fails"]`
+        deselects the very test that would have failed. Both returned
+        status="pass" -- a fail-open in the one component whose entire job
+        is to fail closed.
+        """
+        return (
+            isinstance(test_id, str)
+            and bool(test_id)
+            and not test_id.startswith("-")
+            and "::" in test_id
+        )
+
     def _tests_currently_pass(self, test_ids: list[str]) -> bool | None:
         """True/False if the run completed; None if pytest itself couldn't
         run at all (TRUTH_UNAVAILABLE, not a normal fail).
         """
         if not test_ids:
             return False
-        result = self._run(test_ids)
-        return None if result is None else result.returncode == 0
+        if not all(self._is_well_formed_test_id(t) for t in test_ids):
+            # Not a truth-unavailable condition and not a stale test: the
+            # citation is malformed, so it supports nothing.
+            return False
+        result = self._run(["--", *test_ids])
+        if result is None:
+            return None
+        # An exit code of 0 is necessary but not sufficient: pytest also
+        # exits 0 when its arguments selected nothing at all. Require that
+        # every id actually ran, so a typo'd or silently-vanished test
+        # reads as unverified rather than as verified.
+        if result.returncode != 0:
+            return False
+        return self._collected_count(test_ids) == len(test_ids)
+
+    def _collected_count(self, test_ids: list[str]) -> int:
+        """How many tests pytest actually collects for these ids."""
+        result = self._run(["--collect-only", "-q", "--", *test_ids])
+        if result is None:
+            return -1
+        # `-q --collect-only` prints one node id per line, then a blank line
+        # and a summary ("3 tests collected in 0.01s").
+        return sum(1 for line in result.stdout.splitlines() if "::" in line)
 
     def verify(self, assertion: Assertion, as_of: datetime, *, checked_at: datetime) -> VerificationResult:
         if not assertion.citations:

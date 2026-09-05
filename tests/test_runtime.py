@@ -144,14 +144,58 @@ def test_remember_flags_a_consistent_fact_as_self_supported(runtime):
 
 def test_remember_accepts_a_paraphrased_value_grounded_by_a_real_evidence_span(runtime):
     # value doesn't appear verbatim in text at all -- only evidence_span does.
+    # Because the span doesn't contain the value either, this is a paraphrase
+    # no deterministic check can confirm, so the caller has to say so; the
+    # event records that it was asserted rather than shown.
     event = runtime.remember(
         "Marc adores the city of Porto lately.", occurred_at=T1,
         entity="marc", attribute="likes", value="loves Porto",
-        evidence_span="adores the city of Porto",
+        evidence_span="adores the city of Porto", paraphrased_value=True,
     )
 
     assert event.payload["self_supported"] is True
+    assert event.payload["value_paraphrased"] is True
     assert event.payload["evidence_span"] == "adores the city of Porto"
+
+
+def test_remember_rejects_a_paraphrase_that_does_not_declare_itself(runtime):
+    # The same write without the flag must fail rather than silently record
+    # an unverifiable paraphrase as if it were grounded.
+    with pytest.raises(SchemaError) as exc_info:
+        runtime.remember(
+            "Marc adores the city of Porto lately.", occurred_at=T1,
+            entity="marc", attribute="likes", value="loves Porto",
+            evidence_span="adores the city of Porto",
+        )
+    assert "VALUE_NOT_IN_SPAN" in str(exc_info.value)
+
+
+def test_remember_rejects_an_evidence_span_that_contradicts_the_value(runtime):
+    # The span is real and appears verbatim in text, so SPAN_NOT_IN_SOURCE
+    # does not catch it -- but it does not support `value`, it contradicts
+    # it. Supplying a span used to set self_supported=True unconditionally,
+    # which made recall() serve verified=True with a citation excerpt
+    # ("Anna hates Porto") flatly contradicting its own claim.
+    with pytest.raises(SchemaError) as exc_info:
+        runtime.remember(
+            "Anna hates Porto and refuses to move there.", occurred_at=T1,
+            entity="anna", attribute="feeling_about_porto", value="loves Porto",
+            evidence_span="Anna hates Porto",
+        )
+    assert "VALUE_NOT_IN_SPAN" in str(exc_info.value)
+
+
+def test_remember_keeps_a_literally_grounded_span_unflagged(runtime):
+    # The value appears inside its own quote -- that IS checkable, it
+    # checks out, and nothing needs to be taken on the caller's word.
+    event = runtime.remember(
+        "Kim lives in Oslo these days.", occurred_at=T1,
+        entity="kim", attribute="city", value="Oslo",
+        evidence_span="Kim lives in Oslo",
+    )
+
+    assert event.payload["self_supported"] is True
+    assert "value_paraphrased" not in event.payload
 
 
 def test_remember_rejects_a_fabricated_evidence_span_at_write_time(runtime):

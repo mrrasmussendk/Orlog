@@ -166,8 +166,32 @@ class Vault:
         return self._aead.decrypt(nonce, ciphertext, None).decode("utf-8")
 
     def forget(self, token: str) -> bool:
-        """Crypto-shred: delete the row. Returns True if one existed."""
+        """Crypto-shred: delete the row. Returns True if one existed.
+
+        The token itself is retired, never reissued. A forgotten token's
+        number must not come back around and be handed to a DIFFERENT
+        subject: every event already appended to the immutable log still
+        references it, so reissuing EMAIL_5 to someone new silently
+        re-identifies all of those past events as being about the new
+        person. The retirement is recorded as a high-water mark in
+        token_counters, which survives the deleted pseudonyms row.
+
+        Known limitation on a legacy vault: _migrate_token_counters() can
+        only see tokens that still exist, so a token forgotten BEFORE this
+        version left no trace and its number can still be reissued once.
+        Re-key such a vault rather than trust it not to collide.
+        """
+        row = self._conn.execute("SELECT kind, token FROM pseudonyms WHERE token = ?", (token,)).fetchone()
         cursor = self._conn.execute("DELETE FROM pseudonyms WHERE token = ?", (token,))
+        if row is not None:
+            kind, forgotten = row
+            suffix = forgotten.rsplit("_", 1)[-1]
+            if suffix.isdigit():
+                self._conn.execute(
+                    "INSERT INTO token_counters (kind, next_seq) VALUES (?, ?) "
+                    "ON CONFLICT(kind) DO UPDATE SET next_seq = MAX(next_seq, excluded.next_seq)",
+                    (kind, int(suffix) + 1),
+                )
         self._conn.commit()
         return cursor.rowcount > 0
 

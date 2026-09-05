@@ -87,6 +87,33 @@ class DeriverTimeout(DeriverFailure):
     reason = "DERIVER_TIMEOUT"
 
 
+class DeriverTruncated(DeriverFailure):
+    """The model stopped because it hit the max_tokens cap, so whatever it
+    produced is an incomplete JSON object rather than an answer.
+
+    Distinguished from UncitedAssertion because the remedy is different and
+    the repair retry cannot help: retrying at the same cap truncates in the
+    same place, so this abstains immediately with an accurate reason instead
+    of paying for a second identical call.
+    """
+
+    reason = "DERIVER_TRUNCATED"
+
+
+class DeriverProviderError(DeriverFailure):
+    """The model provider failed for any reason other than a timeout -- rate
+    limited, overloaded, unauthorized, unreachable, or answering with a
+    response object the adapter could not read.
+
+    These all arrive as provider-SDK exception types, which pipeline.py must
+    never see: it abstains on DeriverFailure, so anything outside the
+    taxonomy escapes answer() and crashes the caller instead of producing
+    the abstention spec §A4 P3 requires.
+    """
+
+    reason = "DERIVATION_FAILED"
+
+
 class Deriver(Protocol):
     def derive(
         self,

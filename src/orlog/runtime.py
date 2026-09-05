@@ -68,14 +68,19 @@ import threading
 from datetime import datetime, timezone
 
 from orlog.config import OrlogConfig
-from orlog.errors import RetrieverUnavailableError, SchemaError
+from orlog.errors import (
+    ChainBrokenError,
+    RetrieverUnavailableError,
+    SchemaError,
+    VerifierUnavailableError,
+)
 from orlog.heimdall import Heimdall, build_ground_truth
 from orlog.huginn import ScriptedDeriver
 from orlog.models.event import EventDraft
 from orlog.muninn import RouteCache
 from orlog.observability import Stats
 from orlog.pipeline import Pipeline
-from orlog.scrub import scrub
+from orlog.scrub import detect_pii_kinds, scrub
 from orlog.skuld import OutcomeLedger
 from orlog.storage import EventIndex, SegmentedLog
 from orlog.vault import Vault
@@ -131,6 +136,19 @@ class Runtime:
         self.workspace = workspace
         self.config = config
         self.log = SegmentedLog(workspace.events_dir)
+        # spec §B2's startup check. verify_chain(full=False) documented
+        # itself as the startup check but had no caller anywhere except
+        # `orlog replay`, so a workspace whose chain was broken -- by
+        # tampering, or by the unlocked-CLI-writer race -- was served
+        # normally, answering every recall with verified=True citations
+        # drawn from a log nobody had checked. Only the newest segment is
+        # walked, to keep startup O(one segment) rather than O(whole log);
+        # `orlog replay` remains the full-chain check.
+        if not self.log.verify_chain():
+            raise ChainBrokenError(
+                f"hash chain is broken in {workspace.events_dir} -- refusing to serve from a log "
+                "whose integrity cannot be established. Run `orlog replay` to see the full extent."
+            )
         self.index = EventIndex(workspace.index_path)
         self.vault = Vault(workspace.vault_path)
         self.cache = RouteCache(max_entries=config.cache.max_entries)
@@ -173,7 +191,22 @@ class Runtime:
                     f"{self.config.retrieval.embedder_build_timeout_s}s"
                 )
             if "error" in outcome:
-                raise outcome["error"]
+                error = outcome["error"]
+                # Every caller (cli.cmd_serve, server_tools' free-text path)
+                # catches RetrieverUnavailableError and degrades to
+                # exact-key recall. They caught only that, though, while a
+                # build can fail as well as hang: a cold fastembed cache
+                # with no network RAISES (download error), and a missing
+                # extra raises ModuleNotFoundError. Either one escaped as
+                # itself, so the server failed to start at all instead of
+                # serving exact-key recalls, and free-text recall crashed
+                # rather than abstaining EMBEDDER_UNAVAILABLE.
+                if not isinstance(error, RetrieverUnavailableError):
+                    raise RetrieverUnavailableError(
+                        f"embedder {self.config.retrieval.embedder!r} could not be built: "
+                        f"{type(error).__name__}: {error}"
+                    ) from error
+                raise error
             self._embedder = outcome["embedder"]
         return self._embedder
 
@@ -190,6 +223,7 @@ class Runtime:
         value: str | None = None,
         entity_detail: str | None = None,
         evidence_span: str | None = None,
+        paraphrased_value: bool = False,
         register_new_type: bool = False,
         register_new_attribute: bool = False,
     ):
@@ -208,6 +242,17 @@ class Runtime:
                 "fact -- text-only memories are not retrievable via recall()/recall_history() in "
                 f"this reference server (got entity={entity!r}, attribute={attribute!r}, value={value!r})."
             )
+        # entity/attribute are structured lookup keys and are deliberately
+        # NOT scrubbed -- tokenizing them would break exact-match
+        # recall("entity.attribute"). That makes them the one way PII can
+        # reach the immutable log in cleartext, where vault.forget()'s
+        # crypto-shredding can never reach it, and from there into every
+        # LLM prompt (pipeline builds the query as "entity.attribute" and
+        # huginn_llm sends it verbatim). Since it cannot be scrubbed, it is
+        # refused: an actionable error at write time beats an unerasable
+        # identifier in an append-only log.
+        self._reject_pii_in_key("entity", entity)
+        self._reject_pii_in_key("attribute", attribute)
         occurred_at = occurred_at or datetime.now(timezone.utc)
         scrubbed_text = scrub(text, self.vault, detectors=self.config.privacy.detectors)
         payload: dict = {"text": scrubbed_text}
@@ -253,10 +298,11 @@ class Runtime:
         # Write-time self-consistency check (heimdall.GroundTruthFact.self_supported):
         # does this fact's own remembered text actually support the value
         # it's being recorded with? When the caller supplies evidence_span,
-        # that's already been validated above (a bad span raised
-        # SchemaError instead of ever reaching here), so self_supported is
-        # simply True and the span itself -- not `value` -- is what a
-        # citation excerpt is built from (see pipeline._citations_from).
+        # the span's presence in text has already been validated above (a
+        # fabricated span raised SchemaError instead of ever reaching here)
+        # and the span itself -- not `value` -- is what a citation excerpt
+        # is built from (see pipeline._citations_from); what remains to
+        # check here is whether the span supports the value.
         # Without evidence_span, this falls back to the legacy check (value
         # itself must appear verbatim in text) for callers that haven't
         # migrated yet. A caller-contradicted legacy fact (e.g. text says
@@ -265,7 +311,33 @@ class Runtime:
         # instead of a fresh derive+verify round trip on every recall().
         if scrubbed_span is not None:
             payload["evidence_span"] = scrubbed_span
+            # A valid span proves the QUOTE is real. It does not prove the
+            # quote supports `value` -- and those came apart badly: a span
+            # is only checked against `text`, so
+            #   text="Anna hates Porto...", value="loves Porto",
+            #   evidence_span="Anna hates Porto"
+            # recorded self_supported=True and made recall() serve
+            # verified=True with a citation excerpt contradicting its own
+            # claim. Supplying a span was, in effect, an opt-out of the
+            # write-time grounding check that a span-less write must pass.
+            #
+            # Literal grounding (the value appears in its own quote) is
+            # checkable, so it is checked. A genuine paraphrase
+            # ("adores the city of Porto" -> "loves Porto") is NOT
+            # deterministically checkable, so it is not guessed at: the
+            # caller must say so, and that assertion is recorded on the
+            # event rather than being indistinguishable from real grounding.
+            grounded = normalize_ws(scrubbed_value) in normalize_ws(scrubbed_span)
+            if not grounded and not paraphrased_value:
+                raise SchemaError(
+                    f"VALUE_NOT_IN_SPAN: value {value!r} does not appear in evidence_span "
+                    f"{evidence_span!r}, so the span does not show where the value came from. "
+                    "Quote a span that contains the value, or pass paraphrased_value=True to "
+                    "record on the event that this is a caller-asserted paraphrase."
+                )
             payload["self_supported"] = True
+            if not grounded:
+                payload["value_paraphrased"] = True
         else:
             payload["self_supported"] = scrubbed_value in scrubbed_text
         if entity_detail:
@@ -276,6 +348,28 @@ class Runtime:
         self.index.index_event(event, segment=self._current_segment_name(), offset=self.log.current_segment_offset())
         self.stats.record_append()
         return event
+
+    def _reject_pii_in_key(self, field: str, value: str) -> None:
+        """Refuse an entity/attribute that carries detectable PII.
+
+        Deliberately narrow: only the unambiguous shapes (email, SSN/CPR,
+        credential) the regex pack already recognizes. A bare name is not
+        detectable and is not what this is for -- the target is
+        `entity="user:alice@example.com"`, which puts an email address
+        beyond the reach of erasure forever.
+        """
+        detectors = self.config.privacy.detectors
+        if detectors is not None and "regex" not in detectors:
+            return  # scrubbing is off entirely; respect that
+        detected = detect_pii_kinds(value)
+        if detected:
+            raise SchemaError(
+                f"PII_IN_KEY: {field}={value!r} looks like it contains {', '.join(sorted(detected))}. "
+                f"{field} is a lookup key, so it is never scrubbed -- storing it would put that "
+                "identifier in the append-only log in cleartext, unreachable by `orlog forget`. "
+                "Use a stable opaque id instead (e.g. entity='user:1'), and put the identifying "
+                "detail in text/value, where it is tokenized, or in entity_detail."
+            )
 
     def _enforce_schema(
         self, entity: str, attribute: str, *, register_new_type: bool, register_new_attribute: bool
@@ -388,6 +482,37 @@ class Runtime:
     def _current_segment_name(self) -> str:
         return self.log._current.path.name
 
+    def _build_verifier(self, truth: dict, *, truth_version: str):
+        """spec §B11's three backends: "windows", "pytest", "module:...".
+
+        This dispatch did not exist -- Heimdall was hardcoded here and
+        `config.verifier.backend` was read by nothing in the entire package,
+        so a workspace configuring `[verifier] backend = "pytest"` (or a
+        custom law-database verifier, spec §B11's own worked example)
+        validated, warned nothing, and was silently gated by the windows
+        verifier instead. An operator believing their own verifier was the
+        gate, when it was not, is the worst possible way for this setting to
+        fail.
+        """
+        backend = self.config.verifier.backend
+        if backend == "windows":
+            return Heimdall(truth, truth_version=truth_version)
+        if backend == "pytest":
+            from orlog.heimdall_pytest import PytestVerifier
+
+            return PytestVerifier(
+                {eid: fact.model_dump() for eid, fact in truth.items()},
+                cwd=self.workspace.root,
+            )
+        if backend.startswith("module:"):
+            from orlog.verifiers import load_verifier_from_module
+
+            return load_verifier_from_module(backend, truth=truth, truth_version=truth_version)
+        raise VerifierUnavailableError(
+            f"unknown verifier backend {backend!r} -- expected 'windows', 'pytest', "
+            "or 'module:package.module.ClassName'"
+        )
+
     def build_pipeline(
         self, *, now: datetime | None = None, known_as_of: datetime | None = None
     ) -> Pipeline | None:
@@ -428,7 +553,7 @@ class Runtime:
         truth_version = f"windows@{pv.built_from}"
         if known_as_of is not None:
             truth_version += f"|known@{known_as_of.isoformat()}"
-        verifier = Heimdall(truth, truth_version=truth_version)
+        verifier = self._build_verifier(truth, truth_version=truth_version)
         return Pipeline(
             view=view,
             events_by_id={e.id: e for e in fact_events},

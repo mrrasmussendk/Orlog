@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from orlog.config import OrlogConfig, WorkspaceConfig, load_config, save_config
+from orlog.errors import LockedError
 from orlog.models.event import EventDraft
 from orlog.vault import VAULT_KEY_ENV, Vault, generate_key
 from orlog.workspace import Workspace
@@ -202,16 +203,23 @@ def cmd_replay(args: argparse.Namespace) -> int:
     from orlog.storage import EventIndex, SegmentedLog
 
     ws = Workspace(args.path)
-    log = SegmentedLog(ws.events_dir)
+    # Also under the lock: rebuild() truncates and repopulates index.sqlite,
+    # which a running server is concurrently reading and writing.
+    try:
+        with ws:
+            log = SegmentedLog(ws.events_dir)
 
-    if not log.verify_chain(full=True):
-        print("HASH CHAIN BROKEN", file=sys.stderr)
-        return 1
-    print(f"hash chain verified ({len(log.read_all())} events)")
+            if not log.verify_chain(full=True):
+                print("HASH CHAIN BROKEN", file=sys.stderr)
+                return 1
+            print(f"hash chain verified ({len(log.read_all())} events)")
 
-    index = EventIndex(ws.index_path)
-    index.rebuild(log)
-    index.close()
+            index = EventIndex(ws.index_path)
+            index.rebuild(log)
+            index.close()
+    except LockedError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 2
     print(f"index.sqlite rebuilt at {ws.index_path}")
     return 0
 
@@ -242,20 +250,35 @@ def cmd_forget(args: argparse.Namespace) -> int:
     from orlog.storage import SegmentedLog
 
     ws = Workspace(args.path)
-    vault = Vault(ws.vault_path)
-    if not vault.forget(args.token):
-        print(f"no such pseudonym: {args.token}", file=sys.stderr)
-        vault.close()
-        return 1
-    vault.close()
+    # Under the workspace lock: this command APPENDS (the erasure event),
+    # and EventLog caches the chain head in memory at construction. Run
+    # unlocked against a live `orlog serve`, this append advanced the log
+    # while the server's cached _last_hash went stale, so the server's very
+    # next remember() wrote a prev_hash pointing at the wrong event and
+    # broke the chain permanently -- with that remember() returning a
+    # perfectly normal {event_id} and no error anywhere. spec §B1 requires
+    # concurrent access to be prevented by the lockfile; only `serve` was
+    # actually taking it.
+    try:
+        with ws:
+            vault = Vault(ws.vault_path)
+            try:
+                if not vault.forget(args.token):
+                    print(f"no such pseudonym: {args.token}", file=sys.stderr)
+                    return 1
+            finally:
+                vault.close()
 
-    log = SegmentedLog(ws.events_dir)
-    log.append(
-        EventDraft(
-            occurred_at=datetime.now(timezone.utc), actor="system", type="x.orlog.forget",
-            payload={"token": args.token},  # what was erased, not the erasure itself, per spec §B7
-        )
-    )
+            log = SegmentedLog(ws.events_dir)
+            log.append(
+                EventDraft(
+                    occurred_at=datetime.now(timezone.utc), actor="system", type="x.orlog.forget",
+                    payload={"token": args.token},  # what was erased, not the erasure itself, per spec §B7
+                )
+            )
+    except LockedError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 2
     print(f"crypto-shredded {args.token}; recorded the erasure event.")
     return 0
 

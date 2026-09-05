@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from orlog.errors import RetrieverUnavailableError
+from orlog.errors import RetrieverUnavailableError, SchemaError
 from orlog.pipeline import AnswerCandidate
 from orlog.retrieval_hybrid import resolve_key
 from orlog.runtime import Runtime
@@ -52,8 +52,27 @@ def _parse_datetime(value: str) -> datetime:
     """
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
-    parsed = datetime.fromisoformat(value)
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        # A bare ValueError is outside the closed error taxonomy that
+        # server.py promises tool errors map into, and "yesterday" is a
+        # thoroughly realistic thing for an LLM to put in a parameter
+        # documented as "the instant you are asking about".
+        raise SchemaError(
+            f"E_SCHEMA: {value!r} is not an ISO-8601 timestamp "
+            "(expected e.g. '2026-06-01T00:00:00Z')"
+        ) from exc
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _is_key_shaped(entity: str, attribute: str) -> bool:
+    """Whether an rpartition(".") split looks like a real
+    "entity.attribute" key rather than prose that happens to contain a dot.
+    """
+    if not entity or not attribute:
+        return False
+    return not any(c.isspace() for c in entity) and not any(c.isspace() for c in attribute)
 
 
 def _empty_abstention(as_of: datetime, reason: str) -> dict:
@@ -69,6 +88,7 @@ def remember_tool(
     recorded_at: str | None = None, type: str = "fact",
     actor: str = "user", entity: str | None = None, attribute: str | None = None, value: str | None = None,
     entity_detail: str | None = None, evidence_span: str | None = None,
+    paraphrased_value: bool = False,
     register_new_type: bool = False, register_new_attribute: bool = False,
 ) -> dict:
     """spec §B9: {text, occurred_at?, type?="fact", actor?="user", entity,
@@ -87,7 +107,7 @@ def remember_tool(
     event = runtime.remember(
         text, occurred_at=occurred, recorded_at=recorded, event_type=type, actor=actor,
         entity=entity, attribute=attribute, value=value, entity_detail=entity_detail,
-        evidence_span=evidence_span,
+        evidence_span=evidence_span, paraphrased_value=paraphrased_value,
         register_new_type=register_new_type, register_new_attribute=register_new_attribute,
     )
     return {"event_id": event.id}
@@ -106,10 +126,24 @@ def recall_tool(
     record now", i.e. the previous single-axis behaviour, unchanged.
     """
     now = datetime.now(timezone.utc)
+    # "current" vs a pinned instant is the as_of CLASS spec §B6 keys the
+    # route cache on -- an ordinary as_of="now" recall must produce the
+    # same key every time, not a new one per microsecond.
+    as_of_class = "current" if as_of == "now" else None
     as_of_dt = now if as_of == "now" else _parse_datetime(as_of)
     known_dt = _parse_datetime(known_as_of) if known_as_of else None
 
     entity, sep, attribute = query.rpartition(".")
+    # A period is not enough to make something a key. rpartition(".") fired
+    # on ANY query containing one, so "Where does Anna live?." and
+    # "who is alice@example.com" were routed to exact-key lookup (the
+    # latter splitting into entity "who is alice@example" / attribute
+    # "com"), found nothing, and returned NO_CANDIDATES for facts that were
+    # on record -- the exact failure this system exists to prevent, over
+    # one character of punctuation. A real "entity.attribute" key has no
+    # whitespace in either half and both halves are non-empty.
+    if sep and not _is_key_shaped(entity, attribute):
+        entity, sep, attribute = "", "", ""
     pipeline = runtime.build_pipeline(now=now, known_as_of=known_dt)
     if pipeline is None:
         # No Pipeline to instrument here -- there's nothing to project from
@@ -130,7 +164,7 @@ def recall_tool(
         # attribute names are often shared across entities ("plan", "city"),
         # so a fuzzy fallback here would risk silently answering about the
         # WRONG entity instead of honestly abstaining.
-        answer = pipeline.answer(query, entity, attribute, as_of_dt, now=now)
+        answer = pipeline.answer(query, entity, attribute, as_of_dt, now=now, as_of_class=as_of_class)
         return answer.model_dump(mode="json")
 
     # No "." at all: not a key, it's free text. Search every fact's own
@@ -149,7 +183,11 @@ def recall_tool(
         runtime.ledger.record_abstention(query_id=query, reasons=["EMBEDDER_UNAVAILABLE"], occurred_at=now)
         return _empty_abstention(as_of_dt, "EMBEDDER_UNAVAILABLE")
 
-    candidates = resolve_key(query, pipeline.view, pipeline.events_by_id, embedder, k=5)
+    # config.retrieval.k, not a hardcoded 5: the documented knob had no
+    # reader anywhere in the package, so setting it changed nothing.
+    candidates = resolve_key(
+        query, pipeline.view, pipeline.events_by_id, embedder, k=runtime.config.retrieval.k
+    )
     strong = [c for c in candidates if c.score >= runtime.config.retrieval.min_confidence]
 
     if not strong:
@@ -158,8 +196,19 @@ def recall_tool(
         runtime.ledger.record_abstention(query_id=query, reasons=["NO_CANDIDATES"], occurred_at=now)
         return _empty_abstention(as_of_dt, "NO_CANDIDATES")
 
+    # The tie test runs over the UNFILTERED candidates, not over `strong`.
+    #
+    # Running it over `strong` made min_confidence silently suppress
+    # ambiguity: a runner-up scoring within a fraction of a percent of the
+    # top -- two entities both plausibly "anna" -- but landing just under
+    # the confidence floor was deleted from the list before the comparison,
+    # leaving exactly one candidate and turning what should have been an
+    # honest AMBIGUOUS abstention into a confident answer about whichever
+    # Anna happened to score higher. The floor's job is deciding whether
+    # ANY match is good enough (NO_CANDIDATES, above); it has no business
+    # deciding whether the best match is unambiguous.
     margin = runtime.config.retrieval.ambiguity_margin
-    tied = [c for c in strong if c.score >= strong[0].score * margin]
+    tied = [c for c in candidates if c.score >= candidates[0].score * margin]
     if len(tied) > 1:
         # More than one key is an about-equally-good match -- report every
         # tied candidate with its confidence instead of silently guessing
@@ -178,7 +227,9 @@ def recall_tool(
         return answer.model_dump(mode="json")
 
     top = strong[0]
-    answer = pipeline.answer(query, top.entity, top.attribute, as_of_dt, now=now)
+    answer = pipeline.answer(
+        query, top.entity, top.attribute, as_of_dt, now=now, as_of_class=as_of_class
+    )
     return answer.model_dump(mode="json")
 
 
@@ -193,6 +244,16 @@ def recall_history_tool(runtime: Runtime, query: str, *, known_as_of: str | None
     failure and a reasoning failure.
     """
     entity, sep, attribute = query.rpartition(".")
+    # A period is not enough to make something a key. rpartition(".") fired
+    # on ANY query containing one, so "Where does Anna live?." and
+    # "who is alice@example.com" were routed to exact-key lookup (the
+    # latter splitting into entity "who is alice@example" / attribute
+    # "com"), found nothing, and returned NO_CANDIDATES for facts that were
+    # on record -- the exact failure this system exists to prevent, over
+    # one character of punctuation. A real "entity.attribute" key has no
+    # whitespace in either half and both halves are non-empty.
+    if sep and not _is_key_shaped(entity, attribute):
+        entity, sep, attribute = "", "", ""
     if not sep:
         return {"query": query, "chain": []}
 
@@ -291,12 +352,28 @@ def list_attributes_tool(runtime: Runtime, entity: str) -> dict:
         return {"ambiguous": True, "entity": entity, "candidates": candidates}
 
     (resolved_key, events), = matched_groups.items()
-    view, _ = build_supersession_chains(events, builder="orlog-runtime", built_at=datetime.now(timezone.utc))
+    as_of = datetime.now(timezone.utc)
+    view, _ = build_supersession_chains(events, builder="orlog-runtime", built_at=as_of)
     events_by_id = {e.id: e for e in events}
     attributes = []
     for chain_key, event_ids in view.chains.items():
         _, _, attribute = chain_key.partition("::")
-        current_id = event_ids[-1]  # last in occurred_at order == the open-ended (current) window
+        # The entry whose validity window contains NOW -- not simply the
+        # last one in the chain. A backfilled fact with a future
+        # occurred_at sorts last but is not yet valid, and reporting it as
+        # the "current value per attribute" contradicted what recall()
+        # served for the very same key, while omitting the value that
+        # actually is current. An attribute whose every window is in the
+        # future has no current value and is left out entirely.
+        current_id = next(
+            (
+                eid for eid in reversed(event_ids)
+                if view.windows[eid].valid_from <= as_of < view.windows[eid].valid_to
+            ),
+            None,
+        )
+        if current_id is None:
+            continue
         window = view.windows[current_id]
         attributes.append({
             "attribute": attribute,
@@ -316,6 +393,12 @@ def check_action_tool(runtime: Runtime, action_description: str) -> dict:
     against the query_id of past outcome events -- a real deployment would
     want a dedicated action-outcome event type instead.
     """
+    # An unanchored substring test means an empty description matches every
+    # outcome event in the log, manufacturing a governance warning
+    # ("6 prior failed attempts matching ''") out of a no-op argument.
+    if not action_description or not action_description.strip():
+        raise SchemaError("E_SCHEMA: action_description must be a non-empty description of the action")
+
     events = runtime.log.read_all()
     failures = [e for e in events if e.type == "outcome.abstention" and action_description in e.payload.get("query_id", "")]
     successes = [
