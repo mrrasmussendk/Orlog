@@ -15,6 +15,13 @@ conformance_src = repo_root / "tests" / "conformance"
 datas = [(str(repo_root / "tests" / "conftest.py"), "tests")]
 datas += [(str(f), "tests/conformance") for f in conformance_src.glob("*.py")]
 
+# The normative spec, served as the orlog://spec MCP resource. server.py
+# looks for it next to the package (orlog/spec_data/), which pip installs
+# via package-data but PyInstaller only bundles if it is named here --
+# otherwise the resource silently returns "spec not found" from the very
+# binaries a release ships.
+datas += [(str(repo_root / "src" / "orlog" / "spec_data" / "ORLOG-SPEC.md"), "orlog/spec_data")]
+
 a = Analysis(
     [str(repo_root / "packaging" / "entrypoint.py")],
     pathex=[str(repo_root / "src")],
