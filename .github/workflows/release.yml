@@ -6,7 +6,31 @@ on:
       - "v*"
 
 jobs:
+  # The release version comes from the tag (see the packaging steps below),
+  # not from pyproject.toml -- which is exactly how pyproject drifted to
+  # 0.1.0 while the actual releases were 0.0.1 and v0.0.2, with nothing to
+  # notice. Fail the release rather than ship a binary whose version
+  # disagrees with the package metadata inside it.
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"   # pinned: tomllib is 3.11+, and the runner default is not guaranteed
+      - name: Tag must match pyproject.toml version
+        run: |
+          set -e
+          tag_version="${GITHUB_REF_NAME#v}"
+          pyproject_version="$(python3 -c 'import tomllib, pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          echo "tag=$tag_version pyproject=$pyproject_version"
+          if [ "$tag_version" != "$pyproject_version" ]; then
+            echo "::error::tag v$tag_version does not match pyproject.toml version $pyproject_version"
+            exit 1
+          fi
+
   build:
+    needs: check-version
     strategy:
       fail-fast: false
       matrix:

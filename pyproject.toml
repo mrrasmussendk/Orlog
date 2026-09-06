@@ -1,6 +1,6 @@
 [project]
 name = "orlog"
-version = "0.1.0"
+version = "0.0.3"
 description = "A spec-with-a-runtime for trustworthy AI agent memory."
 readme = "README.md"
 license = { text = "Apache-2.0" }
