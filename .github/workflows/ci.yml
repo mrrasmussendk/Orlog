@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    # Ref matching is case-sensitive, and this repo's default branch is
+    # "Main" -- so a lowercase-only list meant pushes to it never ran CI.
+    branches: [Main, main, master]
   pull_request:
 
 jobs:
