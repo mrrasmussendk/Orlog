@@ -1,0 +1,88 @@
+name: Publish to PyPI
+
+# Kept separate from release.yml on purpose. That workflow builds the
+# standalone binaries and is tied to a tag push; this one only needs the
+# pure-Python sdist/wheel, and being separate means an already-tagged
+# version can be published (or re-attempted after a failure) via
+# workflow_dispatch without rebuilding three platforms' binaries or
+# colliding with an existing GitHub Release.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or ref to publish (defaults to the current branch)"
+        required: false
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the tag matches pyproject.toml
+        # Only meaningful for a tag push; a manual run publishes whatever
+        # version the chosen ref declares.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -e
+          tag_version="${GITHUB_REF_NAME#v}"
+          pyproject_version="$(python3 -c 'import tomllib, pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          echo "tag=$tag_version pyproject=$pyproject_version"
+          if [ "$tag_version" != "$pyproject_version" ]; then
+            echo "::error::tag v$tag_version does not match pyproject.toml version $pyproject_version"
+            exit 1
+          fi
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+
+      - name: Verify the built distributions
+        # twine check catches metadata that PyPI would reject on upload --
+        # cheaper to fail here than halfway through a publish.
+        run: |
+          python -m pip install --upgrade twine
+          python -m twine check dist/*
+          echo "--- contents ---"
+          python -c "
+          import zipfile, glob
+          wheel = glob.glob('dist/*.whl')[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          assert 'orlog/spec_data/ORLOG-SPEC.md' in names, 'the spec is missing from the wheel'
+          print(wheel, '->', len(names), 'files, spec bundled')
+          "
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Trusted Publishing: PyPI verifies this workflow's OIDC identity, so
+    # there is no API token to store or rotate. Requires a matching
+    # publisher configured on pypi.org (project "orlog", this repo, this
+    # workflow filename, environment "pypi").
+    environment:
+      name: pypi
+      url: https://pypi.org/p/orlog
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
