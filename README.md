@@ -348,8 +348,11 @@ enabled = ["mimir"]   # strict allowlist. Omit the key for "every installed
 ```
 
 `tests/fixtures/orlog_refplugin/` is a working no-op profile exercising all
-three groups, and `tests/test_plugins.py` installs it as a real
-distribution rather than monkeypatching discovery.
+three groups. `tests/test_plugins.py` installs it as a real distribution
+rather than monkeypatching discovery, and
+`tests/test_profile_lifecycle.py` drives a profile's whole life — install,
+write typed events, restart, `orlog replay`, then turn it off — against a
+real `orlog serve --http` daemon in its own process.
 
 ## Known deviations from ORLOG-SPEC.md v1.1
 
