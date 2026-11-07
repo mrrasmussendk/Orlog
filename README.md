@@ -40,20 +40,36 @@ only stores structured facts, not free-form text blobs.
 
 ## Install
 
-Python 3.11+ required.
+Pick whichever line fits how you work:
 
 ```bash
-git clone https://github.com/mrrasmussendk/Orlog.git
-cd Orlog
-python -m pip install -e ".[anthropic,openai]"
+uvx orlog init myproject --client=claude-code   # nothing installed: runs the latest release
+pipx install orlog                              # a persistent, isolated install
+python -m pip install orlog                     # or into the env you already have
+brew install mrrasmussendk/tap/orlog            # a prebuilt binary, no Python at all
 ```
 
-The `anthropic` / `openai` extras are only needed for the real LLM
-extractor. Plain `pip install -e .` is enough to run everything
-deterministically, no API key involved.
+Python 3.11+ for the first three; the Homebrew binary and the
+[release zips](#standalone-binary-no-python-required) need nothing.
 
-Prefer no Python at all? Every tagged release ships a standalone binary —
-see [Standalone binary](#standalone-binary-no-python-required).
+The `anthropic` / `openai` extras (`pipx install 'orlog[anthropic]'`) are
+only needed for the real LLM extractor — orlog runs everything
+deterministically without them, no API key involved.
+
+Then check your work:
+
+```bash
+orlog doctor myproject   # vault key, workspace, embedder, deriver, MCP clients
+```
+
+Working on orlog itself rather than with it? See
+[Development](#development).
+
+> **Pre-1.0:** the PyPI package is published by
+> [`publish-pypi.yml`](.github/workflows/publish-pypi.yml) on each `vX.Y.Z`
+> tag ([releasing](docs/RELEASING.md)). If `uvx`/`pipx` can't find a version
+> yet, install from a checkout (`pip install .`) or take a
+> [release binary](#standalone-binary-no-python-required).
 
 ## Your first 60 seconds
 
@@ -115,18 +131,33 @@ of inventing an answer.
 > `ORLOG_VAULT_KEY` is not stored on disk. Lose it and the encrypted
 > pseudonym registry for that workspace is unrecoverable.
 
-## Use it from Claude Code
+## Use it from your agent
 
-orlog speaks MCP, so an agent can call `remember` / `recall` directly.
-One command wires it up:
+orlog speaks MCP, so an agent can call `remember` / `recall` directly. One
+command scaffolds the workspace *and* registers the server — including the
+vault key, which is the one thing orlog never writes to disk itself:
 
 ```bash
-orlog init myproject --claude-code   # scaffolds the workspace AND registers the
-                                     # MCP server (with its vault key) in ~/.claude.json
+orlog init myproject --client=claude-code
 ```
 
-Restart Claude Code and the `remember`, `recall`, `recall_history`,
-`check_action`, and `stats` tools are available. To do it by hand instead:
+| `--client=` | writes to |
+|---|---|
+| `claude-code` | `~/.claude.json` |
+| `claude-desktop` | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS), `%APPDATA%\Claude\…` (Windows), `~/.config/Claude/…` (Linux) |
+| `cursor` | `~/.cursor/mcp.json` |
+| `vscode` | VS Code's user `mcp.json` |
+| `windsurf` | `~/.codeium/windsurf/mcp_config.json` |
+| `codex` | `~/.codex/config.toml` (appended, so your comments survive) |
+
+Repeat the flag to register several at once, and `--server-name` to register
+a second workspace alongside the first. Every write backs the file up first
+and leaves everything else in it alone. Reload the client and the
+`remember`, `recall`, `recall_history`, `check_action` and `stats` tools are
+there; `orlog doctor` will tell you which clients it found and whether their
+entries still point at a real `orlog`.
+
+To do it by hand instead:
 
 ```bash
 orlog init myproject          # prints a vault key
@@ -208,8 +239,8 @@ doesn't match the spec exactly.
 
 ## The Norse module map
 
-Thirty modules, six layers, one rule: nothing reaches the world without
-evidence.
+Thirty-two modules, six layers, one rule: nothing reaches the world
+without evidence.
 
 <details>
 <summary><strong>Full module-by-module breakdown</strong> (click to expand)</summary>
@@ -240,7 +271,9 @@ evidence.
 | `projections.py`       | —                                        | L1    | the projection registry, its cache, and the incremental-append path |
 | `tools.py`             | —                                        | —     | the MCP tool registry; binds a profile's `(runtime, ...) -> dict` for FastMCP |
 | `runtime.py`           | —                                        | —     | wires a Workspace + Config into a live Pipeline |
-| `cli.py`               | —                                        | —     | `orlog init/serve/conformance/replay/inspect/forget` |
+| `cli.py`               | —                                        | —     | `orlog init/serve/doctor/conformance/replay/inspect/forget` |
+| `mcp_clients.py`       | —                                        | —     | `init --client=<name>`: the per-client MCP config paths and merge strategies |
+| `doctor.py`            | —                                        | —     | `orlog doctor`: read-only checks for every way an install silently doesn't work |
 | `server.py` / `server_tools.py` | —                               | —     | the MCP server: `remember`/`recall`/`recall_history`/`check_action`/`stats` |
 | `observability.py`     | —                                        | —     | structured JSON logs + stats counters |
 | `errors.py`            | —                                        | —     | the closed error taxonomy (E_SCHEMA, E_LOCKED, ...) |
@@ -257,6 +290,7 @@ API-key-free conformance runs; `LLMDeriver` is the real thing, swapped in via
 
 ```
 docs/WHAT-IS-ORLOG.md       the no-jargon introduction — start here
+docs/RELEASING.md           how a version gets to PyPI, GitHub Releases and Homebrew
 docs/DESIGN-PRINCIPLES.md   design rationale
 docs/ORLOG-SPEC.md          normative protocol v1.1 — source of truth for src/orlog/
 spec/schemas/                JSON Schema contracts for the six layers
@@ -271,7 +305,8 @@ tests/fixtures/orlog_refplugin/  the no-op reference profile: one event type, on
 
 ```
 orlog init myworkspace          # scaffold a workspace, prints a vault key to export
-orlog init myworkspace --claude-code   # ...and register it as an MCP server in Claude Code
+orlog init myworkspace --client=claude-code   # ...and register it as an MCP server
+orlog doctor myworkspace        # what would stop this install working, and why
 orlog serve                     # MCP stdio server (one client per server)
 orlog serve --http :8787        # ...or one daemon several MCP clients share
 orlog replay                    # verify the hash chain, rebuild index.sqlite
@@ -279,6 +314,11 @@ orlog inspect <event_id>        # provenance chain
 orlog forget <PSEUDONYM_TOKEN>  # crypto-shred
 orlog conformance               # run tests/conformance/ against this install
 ```
+
+`doctor` is read-only — it takes no lock and makes no network call, so it is
+safe to run against a workspace a live server is holding, which is when you
+are most likely to want it. It exits non-zero only if something is actually
+broken.
 
 `--http` binds to `127.0.0.1` unless you spell out a host, and carries no
 authentication of its own — it exists so several MCP clients can share one
@@ -292,16 +332,20 @@ Every command except `conformance` takes an optional workspace path
 
 ## Standalone binary (no Python required)
 
-Every tagged release (`vX.Y.Z`) publishes standalone `orlog` executables
-for Windows, macOS, and Linux to
+Every tagged release (`vX.Y.Z`) publishes standalone `orlog` executables to
 [GitHub Releases](https://github.com/mrrasmussendk/Orlog/releases) — no
-Python install required. Download the zip for your platform, unzip it
+Python install required — for macOS (arm64 and x86_64), Linux (x86_64 and
+arm64) and Windows (x86_64). Download the zip for your platform, unzip it
 somewhere on `PATH`, and the same CLI/MCP-server workflow above applies
 unchanged:
 
 ```
-orlog init myworkspace --claude-code
+orlog init myworkspace --client=claude-code
 ```
+
+`brew install mrrasmussendk/tap/orlog` installs the same binary and, because
+Homebrew fetches over curl, skips the macOS Gatekeeper prompt a browser
+download produces.
 
 The binary bundles both the `anthropic` and `openai` extras. The default
 `fastembed` embedder still downloads its model over the network on first
@@ -311,6 +355,8 @@ fully offline.
 ## Development
 
 ```bash
+git clone https://github.com/mrrasmussendk/Orlog.git
+cd Orlog
 python -m pip install -e ".[dev,anthropic,openai]"
 pytest
 ```
@@ -359,11 +405,13 @@ real `orlog serve --http` daemon in its own process.
 
 ## Known deviations from ORLOG-SPEC.md v1.1
 
-- `pipeline.py` is 521 lines and `runtime.py` 661, both well over this
-  project's own ~200-line-per-file guideline. `pipeline.py` is the central
-  orchestrator wiring every layer together plus the optional stats hooks;
-  `runtime.py` is the write path plus the registry wiring. Splitting either
-  felt riskier than leaving it, but both are candidates for a cleanup pass.
+- `pipeline.py` is 521 lines, `runtime.py` 661 and `cli.py` 515, all well
+  over this project's own ~200-line-per-file guideline. `pipeline.py` is the
+  central orchestrator wiring every layer together plus the optional stats
+  hooks; `runtime.py` is the write path plus the registry wiring; `cli.py`
+  is one function per subcommand, with the install surface already split out
+  into `mcp_clients.py` and `doctor.py`. Splitting them further felt riskier
+  than leaving them, but all three are candidates for a cleanup pass.
 - `FastEmbedEmbedder` (the spec-default embedder, `BAAI/bge-small-en-v1.5`)
   is now exercised directly by `tests/test_retrieval_hybrid.py`'s
   `resolve_key()` regression tests (three cases, added alongside the

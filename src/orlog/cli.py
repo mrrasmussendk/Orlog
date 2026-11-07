@@ -1,6 +1,12 @@
-"""cli: orlog init/serve/conformance/replay/inspect/forget (ORLOG-SPEC.md §B1).
+"""cli: orlog init/serve/doctor/conformance/replay/inspect/forget (ORLOG-SPEC.md §B1).
 
 Design decisions:
+
+0. `init --client=<name>` and `doctor` are the install surface, and both
+   delegate: the per-client config paths and merge strategies live in
+   mcp_clients.py, the checks in doctor.py. The spec-mandated commands keep
+   this module; what it takes to get orlog running on someone else's
+   machine does not belong in the same file as the protocol's CLI.
 
 1. Every subcommand is a plain `(args) -> int` function, independently
    callable and testable without going through argparse or a real process
@@ -34,27 +40,40 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 from orlog.config import OrlogConfig, WorkspaceConfig, load_config, save_config
 from orlog.errors import LockedError
+from orlog.mcp_clients import (
+    CLIENTS,
+    DEFAULT_SERVER_NAME,
+    ClientConfigError,
+    config_path_for,
+    register,
+)
 from orlog.models.event import EventDraft
 from orlog.vault import VAULT_KEY_ENV, Vault, generate_key
 from orlog.workspace import Workspace
 
 
 def _default_claude_code_config_path() -> Path:
-    return Path.home() / ".claude.json"
+    return config_path_for(CLIENTS["claude-code"])
 
 
-def _orlog_command() -> str:
-    """Best-effort path to the currently-running `orlog` executable, for
-    embedding as the spawned MCP server's `command`."""
-    exe = shutil.which("orlog")
-    return str(Path(exe).resolve()) if exe else str(Path(sys.argv[0]).resolve())
+def _client_config_path(client_key: str) -> Path:
+    """Where `init --client=<key>` will write.
+
+    claude-code resolves through `_default_claude_code_config_path` rather
+    than going straight to mcp_clients: that function is the seam the test
+    suite monkeypatches to keep `cmd_init` away from the real
+    ~/.claude.json, and a refactor that quietly bypassed it would have
+    tests editing the developer's own Claude Code config.
+    """
+    if client_key == "claude-code":
+        return _default_claude_code_config_path()
+    return config_path_for(CLIENTS[client_key])
 
 
 def write_claude_code_mcp_config(
@@ -62,32 +81,48 @@ def write_claude_code_mcp_config(
 ) -> Path:
     """Register this workspace as an MCP server in Claude Code's config.
 
-    Backs up the existing file first: it also holds unrelated Claude Code
-    state (session history, prefs), so a failed/partial rewrite must not
-    lose that.
+    Kept as a named function (rather than folded into `register`) because
+    `--claude-code` is the flag the README, the Homebrew formula's caveats
+    and every existing install instruction name, and this is the one client
+    whose config path tests monkeypatch via
+    `_default_claude_code_config_path`.
     """
-    path = config_path or _default_claude_code_config_path()
-    if path.exists():
-        shutil.copy2(path, path.with_suffix(path.suffix + ".bak"))
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{path} exists but is not valid JSON ({exc}) -- fix or remove it, or add the mcpServers entry yourself") from exc
-    else:
-        data = {}
+    return register(
+        "claude-code",
+        ws,
+        vault_key,
+        server_name=server_name,
+        config_path=config_path or _default_claude_code_config_path(),
+    )
 
-    data.setdefault("mcpServers", {})[server_name] = {
-        "type": "stdio",
-        "command": _orlog_command(),
-        "args": ["serve", str(ws.root.resolve())],
-        "env": {VAULT_KEY_ENV: vault_key},
-    }
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    return path
+
+def _requested_clients(args: argparse.Namespace) -> list[str]:
+    """The MCP clients to register, from --client (repeatable) plus the
+    older --claude-code flag, de-duplicated and order-preserving."""
+    requested = list(getattr(args, "client", None) or [])
+    if getattr(args, "claude_code", False) and "claude-code" not in requested:
+        requested.insert(0, "claude-code")
+    seen: dict[str, None] = {}
+    for name in requested:
+        seen.setdefault(name, None)
+    return list(seen)
 
 
 def cmd_init(args: argparse.Namespace) -> int:
     root = Path(args.path)
+    clients = _requested_clients(args)
+    unknown = [c for c in clients if c not in CLIENTS]
+    if unknown:
+        # argparse's `choices` already rejects a typo'd --client on the
+        # command line; this guards the direct `cmd_init(Namespace(...))`
+        # call path (design decision 1), and fails before scaffolding so a
+        # bad client name leaves no half-set-up workspace behind.
+        print(
+            f"unknown MCP client(s): {', '.join(unknown)} -- known clients: {', '.join(sorted(CLIENTS))}",
+            file=sys.stderr,
+        )
+        return 2
+
     ws = Workspace(root)
     ws.scaffold()
 
@@ -103,33 +138,62 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     if not freshly_created:
         # A pre-existing workspace already has a vault encrypted under some
-        # other key -- generating a new one here and (with --claude-code)
-        # writing it into a live config would silently point Claude Code at
-        # a key that can't open this vault.
-        if args.claude_code:
+        # other key -- generating a new one here and writing it into a live
+        # client config would silently point that client at a key that
+        # can't open this vault.
+        if clients:
             print(
                 "This workspace already existed, so no new vault key was generated. "
                 "orlog init doesn't know the original key, and writing a fresh one "
-                "into Claude Code's config would break the existing vault -- set "
-                "ORLOG_VAULT_KEY yourself in that mcpServers entry's env block."
+                "into an MCP client's config would break the existing vault -- set "
+                f"{VAULT_KEY_ENV} yourself in that server entry's env block."
             )
         return 0
 
     vault_key = generate_key()
-    if args.claude_code:
-        server_name = args.claude_code_name or "orlog"
-        try:
-            config_path = write_claude_code_mcp_config(ws, vault_key, server_name=server_name)
-        except ValueError as exc:
-            print(f"Workspace and vault key were created, but registering with Claude Code failed: {exc}", file=sys.stderr)
-            print(f"  ORLOG_VAULT_KEY={vault_key}", file=sys.stderr)
-            return 2
-        print(f"Registered '{server_name}' as an MCP server in {config_path}, including the vault key.")
-        print("Restart Claude Code for it to pick up the new server.")
-    else:
+    if not clients:
         print("Set this before running `orlog serve` (a vault key, never written to disk by init):")
-        print(f"  ORLOG_VAULT_KEY={vault_key}")
+        print(f"  {VAULT_KEY_ENV}={vault_key}")
+        return 0
+
+    server_name = args.server_name or args.claude_code_name or DEFAULT_SERVER_NAME
+    failed = []
+    for client_key in clients:
+        client = CLIENTS[client_key]
+        try:
+            config_path = register(
+                client_key, ws, vault_key, server_name=server_name, config_path=_client_config_path(client_key)
+            )
+        except ClientConfigError as exc:
+            print(f"registering with {client.label} failed: {exc}", file=sys.stderr)
+            failed.append(client_key)
+            continue
+        print(f"Registered '{server_name}' as an MCP server in {config_path}, including the vault key.")
+        if client.note:
+            print(f"  {client.label}: {client.note}.")
+
+    if failed:
+        # The workspace and its key exist either way, so print the key --
+        # without it, a partially-registered workspace is unopenable and the
+        # user has no way to finish the job by hand.
+        print(
+            f"Workspace and vault key were created, but {len(failed)} client(s) were not registered. "
+            f"Add this to the server entry's env block yourself:",
+            file=sys.stderr,
+        )
+        print(f"  {VAULT_KEY_ENV}={vault_key}", file=sys.stderr)
+        return 2
     return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Inspect this install and report what would stop it working. Read-only
+    (see doctor.py): safe to run against a workspace a live server holds."""
+    from orlog.doctor import FAIL, format_checks, run_checks
+
+    checks = run_checks(Path(args.path))
+    print(format_checks(checks))
+    return 1 if any(c.status == FAIL for c in checks) else 0
 
 
 def parse_listen(value: str) -> tuple[str, int]:
@@ -376,12 +440,34 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("path", nargs="?", default=".")
     p.add_argument("--name")
     p.add_argument(
+        "--client",
+        action="append",
+        metavar="NAME",
+        choices=sorted(CLIENTS),
+        help=(
+            "also register this workspace as an MCP server in this client's config, including the "
+            "vault key. Repeatable. One of: " + ", ".join(sorted(CLIENTS))
+        ),
+    )
+    p.add_argument(
         "--claude-code",
         action="store_true",
-        help="also register this workspace as an MCP server in Claude Code's config (~/.claude.json), including the vault key",
+        help="shorthand for --client=claude-code",
     )
-    p.add_argument("--claude-code-name", default=None, help="mcpServers entry name to use (default: 'orlog')")
+    p.add_argument(
+        "--server-name",
+        default=None,
+        help=f"the name to register the server under (default: {DEFAULT_SERVER_NAME!r})",
+    )
+    # The older spelling, kept working: now that every client is supported,
+    # --server-name is the one that reads right -- but --claude-code-name is
+    # in released help output and in users' notes.
+    p.add_argument("--claude-code-name", default=None, help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("doctor", help="check this install and report what would stop it working")
+    p.add_argument("path", nargs="?", default=".")
+    p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("serve", help="run the MCP server (stdio by default)")
     p.add_argument("path", nargs="?", default=".")
