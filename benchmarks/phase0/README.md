@@ -11,6 +11,8 @@ is **not** the [orlog vs Mem0 benchmark](../vs_mem0/README.md), which
 measures accuracy and abstention against another system and does need real
 keys.
 
+Charts: [`dashboard.html`](dashboard.html) — open it in a browser.
+
 ## Running it
 
 ```bash
@@ -24,6 +26,53 @@ python -m benchmarks.phase0.compare before.json after.json --out results.json
 `bench.py` records `orlog_has_index_query_api` in each report and
 `compare.py` refuses a mislabelled pair, so a before/after can't be
 accidentally reversed.
+
+The context and correctness numbers below come from a second script, which
+needs only one checkout:
+
+```bash
+python -m benchmarks.phase0.context --out context.json
+```
+
+## Context per answer
+
+How much context one answer costs an agent, against the baseline an agent
+without a memory layer actually falls back to — re-reading the record.
+Tokens are chars ÷ 3.5, the estimator the Mímir plan uses for the same job.
+
+| facts | `recall` | re-read the log | reduction | precision of a re-read |
+|------:|---------:|----------------:|----------:|-----------------------:|
+| 40 | 116 | 4,777 | 41× | 2.43% |
+| 400 | 116 | 47,199 | 407× | 0.25% |
+| 2 000 | 116 | 237,257 | 2 045× | 0.05% |
+| 10 000 | 116 | 1,191,542 | 10 272× | 0.01% |
+
+`recall` returns one verified claim with its citations: **116 tokens at
+every scale**, all of them about the fact that was asked for. A re-read
+delivers one relevant fact among n, so its context precision is 1/n by
+token mass — 2.43% at 40 facts, 0.01% at 10 000.
+
+Phase 0 did not change these numbers: the tools return the shapes they
+always did. This is what orlog is *for*. What the seams changed is the cost
+of producing that answer, which is the table above.
+
+## Verify or abstain
+
+55 questions over [`vs_mem0`'s dataset](../vs_mem0/dataset.py) — 40 facts
+with 10 later superseded, and 15 that were never stored — asked by exact
+key with the ScriptedDeriver, so neither a model's extraction nor an
+embedding's recall is in the loop. What is measured is the deterministic
+verify-or-abstain pipeline.
+
+| | n | result |
+|---|--:|---|
+| stable facts | 30 | 30 served and verified |
+| superseded facts | 10 | 10 served the **current** value, not the original |
+| never stored | 15 | 15 abstained |
+| **confidently wrong** | — | **0 of 55** |
+
+Free-text accuracy against Mem0 is a different question and lives in
+[`vs_mem0`](../vs_mem0/README.md); it needs API keys and makes billed calls.
 
 ## Results
 

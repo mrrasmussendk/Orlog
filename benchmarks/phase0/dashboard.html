@@ -1,0 +1,401 @@
+<meta charset="utf-8">
+<title>Phase 0 Benchmark</title>
+<style>
+  /* Tokens follow benchmarks/vs_mem0/dashboard.html, which takes them from
+     the dataviz skill's reference palette: chrome and ink verbatim from its
+     "Chart chrome & ink" table.
+
+     Two color jobs here. Where the comparison is between two different
+     THINGS (one verified answer vs. re-reading the record), --a/--b are
+     categorical slots 1 and 2 -- validate_palette.js: all checks pass both
+     modes, worst all-pairs CVD dE 24.7 light / 26.8 dark against a floor of
+     8. Where the comparison is BEFORE and AFTER the same thing, the form is
+     emphasis (one hue + the de-emphasis gray), so --before is the muted ink.
+     That pair fails the validator's chroma floor by design -- a neutral is
+     not a categorical hue -- while passing CVD separation (dE 15.9),
+     normal-vision (17.8) and contrast. It carries a legend and direct
+     labels besides. Don't "fix" the gray into a hue. */
+  :root {
+    --surface:     #fcfcfb;
+    --page:        #f9f9f7;
+    --ink:         #0b0b0b;
+    --ink-soft:    #52514e;
+    --ink-mute:    #898781;
+    --line:        #e1e0d9;
+    --line-strong: #c3c2b7;
+    --border:      rgba(11,11,11,0.10);
+    --a:           #2a78d6;   /* categorical slot 1 -- orlog's answer */
+    --b:           #eb6834;   /* categorical slot 2 -- the baseline */
+    --before:      #898781;   /* emphasis: de-emphasis gray */
+    --after:       #2a78d6;   /* emphasis: the accent */
+    --good:        #0ca30c;
+    --tint:        #eaf1fc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface: #1a1a19; --page: #0d0d0d; --ink: #f0efec; --ink-soft: #c3c2b7;
+      --ink-mute: #898781; --line: #2c2c2a; --line-strong: #383835;
+      --border: rgba(255,255,255,0.10);
+      --a: #3987e5; --b: #d95926; --before: #898781; --after: #3987e5;
+      --good: #0ca30c; --tint: #182437;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface: #1a1a19; --page: #0d0d0d; --ink: #f0efec; --ink-soft: #c3c2b7;
+    --ink-mute: #898781; --line: #2c2c2a; --line-strong: #383835;
+    --border: rgba(255,255,255,0.10);
+    --a: #3987e5; --b: #d95926; --before: #898781; --after: #3987e5;
+    --good: #0ca30c; --tint: #182437;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap {
+    max-width: 920px; margin: 0 auto;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 40px 56px;
+  }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 20px; margin-bottom: 32px; }
+  h1 { font-size: 26px; line-height: 1.2; margin: 0 0 6px; text-wrap: balance; letter-spacing: -0.01em; }
+  .sub { color: var(--ink-soft); margin: 0; font-size: 14px; max-width: 62ch; }
+  .meta { color: var(--ink-mute); font-size: 12.5px; margin-top: 10px; }
+  h2 { font-size: 17px; margin: 0 0 4px; letter-spacing: -0.005em; }
+  .lede { color: var(--ink-soft); font-size: 13.5px; margin: 0 0 16px; max-width: 64ch; }
+  section { margin-bottom: 40px; }
+
+  .hero {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 24px; display: flex; flex-wrap: wrap; gap: 28px 40px; align-items: flex-end;
+  }
+  .hero .fig { font-size: 52px; line-height: 1; font-weight: 600; letter-spacing: -0.02em; }
+  .hero .fig small { font-size: 18px; font-weight: 500; color: var(--ink-soft); margin-left: 6px; letter-spacing: 0; }
+  .hero .cap { color: var(--ink-soft); font-size: 13px; margin-top: 8px; max-width: 30ch; }
+  .hero .vs { color: var(--ink-mute); font-size: 13px; max-width: 34ch; }
+  .hero .vs b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+  .tile .k { font-size: 11.5px; letter-spacing: 0.055em; text-transform: uppercase; color: var(--ink-mute); }
+  .tile .v { font-size: 25px; font-weight: 600; margin-top: 5px; letter-spacing: -0.015em; }
+  .tile .n { font-size: 12.5px; color: var(--ink-soft); margin-top: 3px; }
+  .tile .v.ok { color: var(--good); }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 18px 12px; }
+  /* A chart narrower than ~560px has unreadable tick labels, so it scrolls
+     in its own container instead of scaling down -- the page body still
+     never scrolls sideways. */
+  .plot { overflow-x: auto; min-width: 0; }
+  svg { display: block; width: 100%; height: auto; min-width: 560px; overflow: visible; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 2px 0 14px; font-size: 13px; color: var(--ink-soft); }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .sw { width: 13px; height: 3px; border-radius: 2px; flex: none; }
+  .sw.dot { width: 9px; height: 9px; border-radius: 50%; }
+
+  .tog {
+    background: none; border: 1px solid var(--line-strong); color: var(--ink-soft);
+    border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 12.5px; cursor: pointer; margin-top: 12px;
+  }
+  .tog:hover { color: var(--ink); border-color: var(--ink-mute); }
+  .tog:focus-visible { outline: 2px solid var(--a); outline-offset: 2px; }
+  .tblwrap { overflow-x: auto; margin-top: 12px; }
+  table { border-collapse: collapse; font-size: 13px; width: 100%; }
+  th, td { text-align: right; padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { color: var(--ink-mute); font-weight: 600; font-size: 11.5px; letter-spacing: 0.045em; text-transform: uppercase; }
+  td { font-variant-numeric: tabular-nums; }
+
+  .tip {
+    position: fixed; pointer-events: none; opacity: 0; transition: opacity .1s;
+    background: var(--ink); color: var(--surface); border-radius: 6px;
+    padding: 7px 10px; font-size: 12.5px; line-height: 1.4; z-index: 20;
+    max-width: 240px; font-variant-numeric: tabular-nums;
+  }
+  .tip b { font-weight: 600; }
+  .note { color: var(--ink-mute); font-size: 12.5px; margin-top: 10px; max-width: 64ch; }
+  .note code, code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+  footer { border-top: 1px solid var(--line); padding-top: 18px; color: var(--ink-mute); font-size: 12.5px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Phase 0: what the seams cost and save</h1>
+    <p class="sub">Five extension seams landed in orlog core (<code>ORLOG-SPEC.md</code> §B12). These are the measurements: what one answer costs an agent in context, and what the read path costs at scale, before and after.</p>
+    <p class="meta">ScriptedDeriver, hashing embedder, exact-key queries — no API calls, no model download, nothing probabilistic. Token counts are chars ÷ 3.5. Python 3.12, Linux.</p>
+  </header>
+
+  <section>
+    <div class="hero">
+      <div>
+        <div class="fig">116<small>tokens</small></div>
+        <div class="cap">to answer one question — the same at 40 facts and at 10,000.</div>
+      </div>
+      <div class="vs">
+        The alternative an agent without a memory layer falls back to is re-reading the record. At 10,000 facts that is <b>1,191,542</b> tokens, of which <b>0.01%</b> concern the question asked.
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Context per answer</h2>
+    <p class="lede">One verified claim with its citations, against re-reading the log to find the same fact. The answer is flat in the size of the workspace; the re-read is not.</p>
+    <div class="card">
+      <div class="legend">
+        <span><i class="sw" style="background:var(--a)"></i>recall — one verified claim</span>
+        <span><i class="sw" style="background:var(--b)"></i>re-read the whole log</span>
+      </div>
+      <div class="plot"><div id="c-context"></div></div>
+      <button class="tog" data-t="t-context">Show as table</button>
+      <div class="tblwrap" id="t-context" hidden></div>
+    </div>
+    <p class="note">Phase 0 did not change these numbers — the tools return the same shapes they always did. This is what orlog is <em>for</em>; the seams are what make it cheap to compute at scale.</p>
+  </section>
+
+  <section>
+    <h2>Context precision</h2>
+    <p class="lede">Of the tokens placed in front of the agent, the share that concern the fact it asked about.</p>
+    <div class="tiles">
+      <div class="tile"><div class="k">recall</div><div class="v ok">100%</div><div class="n">116 of 116 tokens, at every scale</div></div>
+      <div class="tile"><div class="k">Re-read · 40 facts</div><div class="v">2.43%</div><div class="n">116 of 4,777 tokens</div></div>
+      <div class="tile"><div class="k">Re-read · 2,000 facts</div><div class="v">0.05%</div><div class="n">116 of 237,257 tokens</div></div>
+      <div class="tile"><div class="k">Re-read · 10,000 facts</div><div class="v">0.01%</div><div class="n">116 of 1,191,542 tokens</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Read latency, before and after</h2>
+    <p class="lede">p50 on a 2,500-event workspace, 30 runs per call. Before Phase 0 every one of these read and re-parsed the whole log; they read an index now.</p>
+    <div class="card">
+      <div class="legend">
+        <span><i class="sw dot" style="background:var(--before)"></i>before</span>
+        <span><i class="sw dot" style="background:var(--after)"></i>after</span>
+      </div>
+      <div class="plot"><div id="c-lat"></div></div>
+      <button class="tog" data-t="t-lat">Show as table</button>
+      <div class="tblwrap" id="t-lat" hidden></div>
+    </div>
+    <p class="note"><code>recall</code> is the one that did not go flat. The projection cache is fully effective — a cached view costs nothing measurable — but two O(n) passes remain per call: re-materializing every fact from the index (22.5 ms) and rebuilding the verifier's ground-truth table (15.3 ms), 38 of its 42 ms.</p>
+  </section>
+
+  <section>
+    <h2>Ingest throughput</h2>
+    <p class="lede">Writes per second as the workspace grows. Before, three separate per-write costs each scanned the whole log, so throughput fell away as the log filled.</p>
+    <div class="card">
+      <div class="legend">
+        <span><i class="sw" style="background:var(--before)"></i>before</span>
+        <span><i class="sw" style="background:var(--after)"></i>after</span>
+      </div>
+      <div class="plot"><div id="c-ing"></div></div>
+      <button class="tog" data-t="t-ing">Show as table</button>
+      <div class="tblwrap" id="t-ing" hidden></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Verify or abstain</h2>
+    <p class="lede">55 questions over the <code>vs_mem0</code> dataset: 40 facts with 10 later superseded, and 15 that were never stored. The number that matters is the last one.</p>
+    <div class="tiles">
+      <div class="tile"><div class="k">Stable facts</div><div class="v ok">30/30</div><div class="n">served and verified</div></div>
+      <div class="tile"><div class="k">Superseded</div><div class="v ok">10/10</div><div class="n">served the current value, not the original</div></div>
+      <div class="tile"><div class="k">Never stored</div><div class="v ok">15/15</div><div class="n">abstained instead of guessing</div></div>
+      <div class="tile"><div class="k">Confidently wrong</div><div class="v ok">0</div><div class="n">of 55 questions</div></div>
+    </div>
+    <p class="note">Exact-key queries, so the embedder is out of the loop — this measures the deterministic verify-or-abstain pipeline, not a model's extraction or an embedding's recall. Free-text accuracy against Mem0 is a separate benchmark and needs API keys.</p>
+  </section>
+
+  <footer>
+    Reproduce: <code>python -m benchmarks.phase0.bench</code> on each side, then
+    <code>python -m benchmarks.phase0.compare before.json after.json</code>; and
+    <code>python -m benchmarks.phase0.context</code>. Raw numbers in
+    <code>results.json</code> and <code>context.json</code>.
+  </footer>
+</div>
+<div class="tip" id="tip"></div>
+
+<script>
+const CONTEXT = [
+  { facts: 40,    recall: 116, raw: 4777,    prec: 0.024283 },
+  { facts: 400,   recall: 116, raw: 47199,   prec: 0.002458 },
+  { facts: 2000,  recall: 116, raw: 237257,  prec: 0.000489 },
+  { facts: 10000, recall: 116, raw: 1191542, prec: 0.000098 },
+];
+const LAT = [
+  { op: "check_action",    before: 55.513,  after: 0.017 },
+  { op: "recall_history",  before: 50.705,  after: 0.132 },
+  { op: "list_entities",   before: 59.662,  after: 0.448 },
+  { op: "list_attributes", before: 54.707,  after: 0.585 },
+  { op: "recall",          before: 145.605, after: 46.994 },
+];
+const ING = [
+  { facts: 250,  before: 105.3, after: 255.2 },
+  { facts: 1000, before: 39.5,  after: 256.8 },
+  { facts: 2500, before: 17.2,  after: 245.3 },
+];
+
+const tip = document.getElementById("tip");
+const fmt = n => n.toLocaleString("en-US");
+const ms  = n => n < 1 ? n.toFixed(3) : n.toFixed(n < 10 ? 2 : 1);
+const SVGNS = "http://www.w3.org/2000/svg";
+
+function el(tag, attrs = {}, text) {
+  const n = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  if (text != null) n.textContent = text;
+  return n;
+}
+function hover(node, html) {
+  const show = e => {
+    tip.innerHTML = html;
+    tip.style.opacity = 1;
+    const r = tip.getBoundingClientRect();
+    const x = Math.min(Math.max(8, e.clientX + 14), window.innerWidth - r.width - 8);
+    const y = Math.max(8, e.clientY - r.height - 12);
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  };
+  node.addEventListener("pointermove", show);
+  node.addEventListener("pointerenter", show);
+  node.addEventListener("pointerleave", () => { tip.style.opacity = 0; });
+  node.style.cursor = "default";
+}
+function svg(host, w, h) {
+  const s = el("svg", { viewBox: `0 0 ${w} ${h}`, role: "img" });
+  host.replaceChildren(s);
+  return s;
+}
+function axisText(s, x, y, t, anchor = "middle", cls = "") {
+  const n = el("text", { x, y, "text-anchor": anchor, "font-size": 12, fill: "var(--ink-mute)" }, t);
+  if (cls) n.setAttribute("class", cls);
+  s.appendChild(n);
+  return n;
+}
+
+/* ---- context per answer: banded x, log y, two series ---- */
+(function () {
+  const W = 860, H = 330, L = 92, R = 108, T = 16, B = 42;
+  const s = svg(document.getElementById("c-context"), W, H);
+  s.setAttribute("aria-label", "Tokens needed to answer one question, by workspace size");
+  const lo = 100, hi = 2000000;
+  const ly = v => T + (H - T - B) * (1 - (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)));
+  const bx = i => L + (W - L - R) * (CONTEXT.length === 1 ? 0.5 : i / (CONTEXT.length - 1));
+
+  for (const t of [100, 1000, 10000, 100000, 1000000]) {
+    s.appendChild(el("line", { x1: L, x2: W - R, y1: ly(t), y2: ly(t), stroke: "var(--line)", "stroke-width": 1 }));
+    axisText(s, L - 10, ly(t) + 4, (t >= 1000 ? (t / 1000) + "K" : String(t)) + (t === 1000000 ? " tokens" : ""), "end");
+  }
+  CONTEXT.forEach((d, i) => axisText(s, bx(i), H - B + 20, d.facts >= 1000 ? (d.facts / 1000) + "K" : String(d.facts)));
+  axisText(s, L + (W - L - R) / 2, H - 6, "facts in the workspace");
+
+  for (const [key, color, label] of [["raw", "var(--b)", "re-read the log"], ["recall", "var(--a)", "recall"]]) {
+    const pts = CONTEXT.map((d, i) => [bx(i), ly(d[key])]);
+    s.appendChild(el("path", {
+      d: pts.map((p, i) => (i ? "L" : "M") + p[0] + " " + p[1]).join(" "),
+      fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
+    }));
+    pts.forEach((p, i) => {
+      const d = CONTEXT[i];
+      s.appendChild(el("circle", { cx: p[0], cy: p[1], r: 5, fill: color, stroke: "var(--surface)", "stroke-width": 2 }));
+      const hit = el("circle", { cx: p[0], cy: p[1], r: 16, fill: "transparent" });
+      hover(hit, `<b>${fmt(d.facts)} facts</b><br>${label}: ${fmt(d[key])} tokens`);
+      s.appendChild(hit);
+    });
+    const last = pts[pts.length - 1];
+    s.appendChild(el("text", { x: last[0] + 12, y: last[1] + 4, "font-size": 13, fill: "var(--ink)", "font-weight": 600 },
+      fmt(CONTEXT[CONTEXT.length - 1][key])));
+    s.appendChild(el("text", { x: last[0] + 12, y: last[1] + 20, "font-size": 11.5, fill: "var(--ink-mute)" }, label));
+  }
+})();
+
+/* ---- read latency: dumbbell, log x, emphasis ---- */
+(function () {
+  const W = 860, rowH = 46, T = 30, B = 40, L = 138, R = 86;
+  const H = T + LAT.length * rowH + B;
+  const s = svg(document.getElementById("c-lat"), W, H);
+  s.setAttribute("aria-label", "p50 latency per read tool, before and after, at 2500 events");
+  const lo = 0.01, hi = 200;
+  const lx = v => L + (W - L - R) * (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo));
+
+  for (const t of [0.01, 0.1, 1, 10, 100]) {
+    s.appendChild(el("line", { x1: lx(t), x2: lx(t), y1: T - 10, y2: H - B + 4, stroke: "var(--line)", "stroke-width": 1 }));
+    axisText(s, lx(t), H - B + 20, t < 1 ? String(t) : String(t));
+  }
+  axisText(s, L + (W - L - R) / 2, H - 6, "p50 milliseconds (log scale)");
+
+  LAT.forEach((d, i) => {
+    const y = T + i * rowH + rowH / 2;
+    s.appendChild(el("text", { x: L - 14, y: y + 4, "text-anchor": "end", "font-size": 13, fill: "var(--ink)" }, d.op));
+    s.appendChild(el("line", { x1: lx(d.after), x2: lx(d.before), y1: y, y2: y, stroke: "var(--line-strong)", "stroke-width": 2 }));
+    for (const [k, color] of [["before", "var(--before)"], ["after", "var(--after)"]]) {
+      s.appendChild(el("circle", { cx: lx(d[k]), cy: y, r: 6, fill: color, stroke: "var(--surface)", "stroke-width": 2 }));
+    }
+    const hit = el("rect", { x: L, y: y - rowH / 2, width: W - L - R, height: rowH, fill: "transparent" });
+    hover(hit, `<b>${d.op}</b><br>before ${ms(d.before)} ms<br>after ${ms(d.after)} ms<br>${(d.before / d.after).toFixed(d.before / d.after > 100 ? 0 : 1)}× faster`);
+    s.appendChild(hit);
+    s.appendChild(el("text", { x: W - R + 12, y: y + 4, "font-size": 13, "font-weight": 600, fill: "var(--ink)" },
+      (d.before / d.after > 100 ? Math.round(d.before / d.after) : (d.before / d.after).toFixed(1)) + "×"));
+  });
+})();
+
+/* ---- ingest throughput: grouped bars, emphasis ---- */
+(function () {
+  const W = 860, H = 300, L = 76, R = 20, T = 18, B = 48;
+  const s = svg(document.getElementById("c-ing"), W, H);
+  s.setAttribute("aria-label", "Ingest throughput before and after, by workspace size");
+  const max = 300;
+  const y = v => T + (H - T - B) * (1 - v / max);
+  const gw = (W - L - R) / ING.length;
+  const bw = Math.min(24, gw / 3.2);
+
+  for (const t of [0, 100, 200, 300]) {
+    s.appendChild(el("line", { x1: L, x2: W - R, y1: y(t), y2: y(t), stroke: t ? "var(--line)" : "var(--line-strong)", "stroke-width": 1 }));
+    // Units on the top tick only: a separate axis caption lands on top of it.
+    axisText(s, L - 10, y(t) + 4, t === 300 ? "300 ev/s" : String(t), "end");
+  }
+
+  ING.forEach((d, i) => {
+    const cx = L + gw * i + gw / 2;
+    [["before", "var(--before)", -1], ["after", "var(--after)", 1]].forEach(([k, color, side]) => {
+      // 2px surface gap between the touching pair
+      const x = cx + (side < 0 ? -bw - 1 : 1);
+      const h = Math.max(2, y(0) - y(d[k]));
+      s.appendChild(el("path", {
+        d: `M${x} ${y(0)} L${x} ${y(d[k]) + 4} Q${x} ${y(d[k])} ${x + 4} ${y(d[k])} L${x + bw - 4} ${y(d[k])} Q${x + bw} ${y(d[k])} ${x + bw} ${y(d[k]) + 4} L${x + bw} ${y(0)} Z`,
+        fill: color,
+      }));
+      s.appendChild(el("text", { x: x + bw / 2, y: y(d[k]) - 8, "text-anchor": "middle", "font-size": 12.5, "font-weight": 600, fill: "var(--ink)" }, d[k].toFixed(1)));
+      const hit = el("rect", { x: x - 4, y: T, width: bw + 8, height: y(0) - T, fill: "transparent" });
+      hover(hit, `<b>${fmt(d.facts)} facts</b><br>${k}: ${d[k].toFixed(1)} events/s`);
+      s.appendChild(hit);
+    });
+    axisText(s, cx, H - B + 20, fmt(d.facts) + " facts");
+  });
+  axisText(s, L + (W - L - R) / 2, H - 6, "workspace size at the time of the write");
+})();
+
+/* ---- table views ---- */
+function table(host, head, rows) {
+  const t = document.createElement("table");
+  t.innerHTML = "<thead><tr>" + head.map(h => `<th>${h}</th>`).join("") + "</tr></thead><tbody>"
+    + rows.map(r => "<tr>" + r.map(c => `<td>${c}</td>`).join("") + "</tr>").join("") + "</tbody>";
+  host.replaceChildren(t);
+}
+table(document.getElementById("t-context"), ["Facts", "recall (tokens)", "Re-read (tokens)", "Reduction", "Precision of a re-read"],
+  CONTEXT.map(d => [fmt(d.facts), fmt(d.recall), fmt(d.raw), Math.round(d.raw / d.recall) + "×", (d.prec * 100).toFixed(2) + "%"]));
+table(document.getElementById("t-lat"), ["Operation", "Before p50", "After p50", "Speedup"],
+  LAT.map(d => [d.op, ms(d.before) + " ms", ms(d.after) + " ms", (d.before / d.after > 100 ? Math.round(d.before / d.after) : (d.before / d.after).toFixed(1)) + "×"]));
+table(document.getElementById("t-ing"), ["Facts", "Before", "After", "Speedup"],
+  ING.map(d => [fmt(d.facts), d.before.toFixed(1) + " ev/s", d.after.toFixed(1) + " ev/s", (d.after / d.before).toFixed(1) + "×"]));
+
+for (const b of document.querySelectorAll(".tog")) {
+  b.addEventListener("click", () => {
+    const t = document.getElementById(b.dataset.t);
+    t.hidden = !t.hidden;
+    b.textContent = t.hidden ? "Show as table" : "Hide table";
+  });
+}
+</script>

@@ -161,10 +161,13 @@ cd myproject && orlog serve   # MCP stdio server
 
 ![orlog vs Mem0 headline numbers](benchmarks/vs_mem0/images/dashboard-hero.png)
 
-There is also a [Phase 0 before/after
-benchmark](benchmarks/phase0/README.md) measuring what the §B12 seams cost
-and save — ingest 14× faster at 2,500 events, the scan tools 94–3265×, and
-an honest note on the one call that did not get flat. It needs no API keys.
+There is also a [Phase 0 benchmark](benchmarks/phase0/README.md) (charts:
+[`dashboard.html`](benchmarks/phase0/dashboard.html)) measuring what the
+§B12 seams cost and save, and what one answer costs an agent in context:
+**116 tokens to answer a question, the same at 40 facts and at 10,000**,
+against 1.19M tokens to re-read the log for it. Ingest is 14× faster at
+2,500 events and the scan tools 94–3265×, with an honest note on the one
+call that did not get flat. It needs no API keys.
 
 Same facts, same questions, both systems for real — no mocks, no LLM judge,
 100 independent runs. orlog wins accuracy (97.5% vs. 75%) and correct
