@@ -84,7 +84,8 @@ def _empty_abstention(as_of: datetime, reason: str) -> dict:
 
 
 def remember_tool(
-    runtime: Runtime, text: str, *, occurred_at: str | None = None,
+    runtime: Runtime, text: str = "", *, payload: dict | None = None,
+    occurred_at: str | None = None,
     recorded_at: str | None = None, type: str = "fact",
     actor: str = "user", entity: str | None = None, attribute: str | None = None, value: str | None = None,
     entity_detail: str | None = None, evidence_span: str | None = None,
@@ -93,7 +94,10 @@ def remember_tool(
 ) -> dict:
     """spec §B9: {text, occurred_at?, type?="fact", actor?="user", entity,
     attribute, value, entity_detail?, evidence_span?, register_new_type?,
-    register_new_attribute?} -> {event_id}. entity/attribute/value are
+    register_new_attribute?} -> {event_id}, OR {payload, type} when `type`
+    names a registered event type (§B12.1), in which case the payload is
+    validated against that type's own model and entity/attribute/value do
+    not apply. For type="fact", entity/attribute/value are
     REQUIRED together -- a text-only memory is not retrievable via
     recall()/recall_history() in this reference server, so
     Runtime.remember() rejects it outright. Raises orlog.errors.SchemaError
@@ -105,7 +109,7 @@ def remember_tool(
     occurred = _parse_datetime(occurred_at) if occurred_at else datetime.now(timezone.utc)
     recorded = _parse_datetime(recorded_at) if recorded_at else None
     event = runtime.remember(
-        text, occurred_at=occurred, recorded_at=recorded, event_type=type, actor=actor,
+        text, payload=payload, occurred_at=occurred, recorded_at=recorded, event_type=type, actor=actor,
         entity=entity, attribute=attribute, value=value, entity_detail=entity_detail,
         evidence_span=evidence_span, paraphrased_value=paraphrased_value,
         register_new_type=register_new_type, register_new_attribute=register_new_attribute,
@@ -258,11 +262,12 @@ def recall_history_tool(runtime: Runtime, query: str, *, known_as_of: str | None
         return {"query": query, "chain": []}
 
     known_dt = _parse_datetime(known_as_of) if known_as_of else None
-    fact_events = [
-        e for e in runtime.log.read_all()
-        if e.type == "fact" and e.payload.get("entity") == entity and e.payload.get("attribute") == attribute
-        and (known_dt is None or e.recorded_at <= known_dt)
-    ]
+    # One indexed lookup for this key (§B12.4), not a full log read filtered
+    # in Python: the chain for ONE fact never needed every event in the
+    # workspace parsed to find it.
+    fact_events = runtime.query.fact_events(
+        entity=entity, attribute=attribute, known_as_of=known_dt
+    )
     if not fact_events:
         return {"query": query, "chain": []}
 
@@ -288,27 +293,21 @@ def list_entities_tool(runtime: Runtime, *, prefix: str | None = None, limit: in
     call, no derive/verify. The scan/list primitive: lets a caller enumerate
     what it already knows without a semantic search.
     """
-    groups: dict[tuple[str, str | None], set[str]] = {}
-    for event in runtime.log.read_all():
-        if event.type != "fact":
-            continue
-        entity = event.payload.get("entity")
-        attribute = event.payload.get("attribute")
-        if entity is None or attribute is None:
-            continue
-        label = event.payload.get("entity_label") or entity
-        detail = event.payload.get("entity_detail")
-        groups.setdefault((label, detail), set()).add(attribute)
-
-    entities = [
-        {"entity_label": label, "entity_detail": detail, "attribute_count": len(attributes)}
-        for (label, detail), attributes in groups.items()
-        if prefix is None or label.startswith(prefix)
-    ]
-    entities.sort(key=lambda e: (e["entity_label"], e["entity_detail"] or ""))
-    if limit is not None:
-        entities = entities[:limit]
-    return {"entities": entities}
+    # A single indexed GROUP BY (§B12.4). This was a full log read that
+    # re-parsed every event in the workspace and grouped it in Python --
+    # for the one tool whose entire promise is that it is the cheap way to
+    # see what is stored.
+    summaries = runtime.query.entity_summaries(prefix=prefix, limit=limit)
+    return {
+        "entities": [
+            {
+                "entity_label": s.entity_label,
+                "entity_detail": s.entity_detail,
+                "attribute_count": s.attribute_count,
+            }
+            for s in summaries
+        ]
+    }
 
 
 def list_attributes_tool(runtime: Runtime, entity: str) -> dict:
@@ -320,20 +319,18 @@ def list_attributes_tool(runtime: Runtime, entity: str) -> dict:
     discipline as recall_tool's AMBIGUOUS path. Same zero-token, no-embedding
     guarantee as list_entities_tool.
     """
-    fact_events = [
-        e for e in runtime.log.read_all()
-        if e.type == "fact" and e.payload.get("entity") is not None and e.payload.get("attribute") is not None
-    ]
-
-    exact_matches = [e for e in fact_events if e.payload["entity"] == entity]
+    # Indexed (§B12.4). An exact "label#detail" key still wins outright
+    # over the bare-label grouping, exactly as before -- a caller who named
+    # one disambiguated entity gets that entity, never an AMBIGUOUS answer
+    # about the label it shares.
+    exact_matches = runtime.query.fact_events(entity=entity)
     if exact_matches:
         matched_groups: dict[str, list] = {entity: exact_matches}
     else:
-        matched_groups = {}
-        for e in fact_events:
-            label = e.payload.get("entity_label") or e.payload["entity"]
-            if label == entity:
-                matched_groups.setdefault(e.payload["entity"], []).append(e)
+        matched_groups = {
+            key: runtime.query.fact_events(entity=key)
+            for key in runtime.query.entity_keys_for_label(entity)
+        }
 
     if not matched_groups:
         return {"entity": entity, "attributes": []}
@@ -399,18 +396,31 @@ def check_action_tool(runtime: Runtime, action_description: str) -> dict:
     if not action_description or not action_description.strip():
         raise SchemaError("E_SCHEMA: action_description must be a non-empty description of the action")
 
-    events = runtime.log.read_all()
-    failures = [e for e in events if e.type == "outcome.abstention" and action_description in e.payload.get("query_id", "")]
-    successes = [
-        e for e in events
-        if e.type == "outcome.verification" and e.payload.get("status") == "pass" and action_description in e.payload.get("assertion_query_id", "")
-    ]
+    # Two indexed COUNT(*)s (§B12.4) instead of reading and re-parsing the
+    # whole log to count two kinds of row in it.
+    counts = runtime.query.outcome_counts(action_description)
     warnings = []
-    if len(failures) >= PRIOR_FAILURE_WARNING_THRESHOLD:
-        warnings.append(f"{len(failures)} prior failed attempts matching {action_description!r}")
-    return {"warnings": warnings, "prior_outcomes": {"failures": len(failures), "successes": len(successes)}}
+    if counts.failures >= PRIOR_FAILURE_WARNING_THRESHOLD:
+        warnings.append(f"{counts.failures} prior failed attempts matching {action_description!r}")
+    return {
+        "warnings": warnings,
+        "prior_outcomes": {"failures": counts.failures, "successes": counts.successes},
+    }
 
 
 def stats_tool(runtime: Runtime) -> dict:
-    """spec §B9: no args -> counters (spec §B8)."""
-    return runtime.stats.snapshot()
+    """spec §B9: no args -> counters (spec §B8), plus the projection
+    cache's own (§B12.2).
+
+    The cache counters are here rather than on Stats because Stats is a
+    pure counter object with no reference to the store. They matter
+    operationally: `misses` climbing with `recalls` means something is
+    invalidating the view on every call, and a projection rebuilt per
+    recall is the difference between a 1ms answer and a full re-projection
+    of the workspace -- which is exactly the behaviour §B12.2's cache
+    exists to remove, so it should be observable rather than inferred from
+    latency.
+    """
+    snapshot = runtime.stats.snapshot()
+    snapshot["projections"] = runtime.projection_store.stats()
+    return snapshot

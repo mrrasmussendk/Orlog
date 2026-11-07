@@ -7,10 +7,10 @@ Design decisions:
    validation error's field path (e.g. "deriver.max_tokens") reads exactly
    like the TOML key path a user would fix.
 
-2. tomllib is stdlib from Python 3.11, but this project currently runs on
-   3.10 (see pyproject.toml's own note on that), so reading falls back to
-   the `tomli` backport, which has an identical API. Writing uses `tomli_w`
-   (there is no stdlib TOML writer, on any version).
+2. Reading uses stdlib `tomllib`, which exists from Python 3.11 -- the
+   floor this package now requires (§B1), so the `tomli` backport and its
+   try/except import are gone. Writing uses `tomli_w` (there is no stdlib
+   TOML writer, on any version).
 
 3. save_config() never writes secrets: DeriverConfig.api_key_env is only
    the NAME of an environment variable, never a key value, so orlog.toml
@@ -23,10 +23,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-try:
-    import tomllib  # Python 3.11+
-except ModuleNotFoundError:  # pragma: no cover -- this project's actual interpreter is 3.10
-    import tomli as tomllib
+import tomllib
 
 import tomli_w
 
@@ -151,23 +148,68 @@ class PrivacyConfig(BaseModel):
     resolve_entities: bool = False
 
 
+class ProfilesConfig(BaseModel):
+    """spec §B10's [profiles] table: which installed profiles this
+    workspace lets near its log (§B12).
+
+    A profile is a distribution that extends orlog through entry points --
+    event types, projections and tools. Discovery is the usual
+    entry-point mechanism, so by default every installed profile loads,
+    exactly as pytest loads its plugins.
+
+    `enabled` has three states, and the empty list is NOT the default one.
+    Absent (None, what an orlog.toml with no `enabled` key gives) means
+    "every installed profile". An explicit empty list means "none" -- the
+    kill switch, for a workspace that wants its log reachable only by core,
+    whatever happens to be installed in the interpreter. A non-empty list
+    is a strict allowlist of distribution names.
+
+    Reading `[]` as "all" would leave no way to say "none" at all, and
+    would make `enabled = []` mean the opposite of what it reads like --
+    on the one setting whose entire job is deciding whose code gets to see
+    this workspace's memories.
+
+    `disabled` subtracts from the default instead, and is ignored when
+    `enabled` is given.
+
+    Both are per-WORKSPACE rather than per-interpreter on purpose. A
+    profile's code gets to type, project and serve this workspace's
+    memories; which ones may do that is a property of the memories, not of
+    whatever happens to be on the machine's path.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    enabled: list[str] | None = None
+    disabled: list[str] = Field(default_factory=list)
+
+
 class SchemaConfig(BaseModel):
     """spec §B10's [schema] table: schema-on-write, opt-in.
 
-    `known_types` is the ONLY thing declared here -- known attributes per
-    type are deliberately not config fields at all. The log itself is the
-    attribute registry (any attribute already used by a fact of a known
-    type is "known"; Runtime._known_attributes_for_type() derives this by
-    scanning), so there is no second, separately-maintained list to drift
-    out of sync with what was actually written. An empty list (the default)
-    disables schema-on-write entirely -- required for backward compatibility,
-    since the existing test suite (and any pre-existing workspace) freely
-    mixes "type:label" and bare, untyped entity strings with nothing
-    pre-registered.
+    Known attributes per type are deliberately not config fields at all.
+    The log itself is the attribute registry (any attribute already used by
+    a fact of a known type is "known"; Runtime._known_attributes_for_type()
+    derives this from the index), so there is no second,
+    separately-maintained list to drift out of sync with what was actually
+    written. An empty `known_types` (the default) disables schema-on-write
+    entirely -- required for backward compatibility, since the existing
+    test suite (and any pre-existing workspace) freely mixes "type:label"
+    and bare, untyped entity strings with nothing pre-registered.
+
+    `known_types` and `known_event_types` are two different registries and
+    are deliberately kept apart. `known_types` is about ENTITY types -- the
+    "person" in "person:emma" -- and gates remember()'s entity/attribute
+    schema check. `known_event_types` is about EVENT types -- the `type`
+    field on the event itself, "fact" or "x.mimir.decision" -- and is
+    merged with core's vocabulary and every loaded profile's registered
+    types to decide which non-fact writes remember() accepts (§B12.1).
+    Folding the two into one list would mean declaring an entity type
+    silently authorized an event type of the same name.
     """
 
     model_config = ConfigDict(extra="forbid")
     known_types: list[str] = Field(default_factory=list)
+    known_event_types: list[str] = Field(default_factory=list)
 
 
 class OrlogConfig(BaseModel):
@@ -192,6 +234,7 @@ class OrlogConfig(BaseModel):
     adaptation: AdaptationConfig = Field(default_factory=AdaptationConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
+    profiles: ProfilesConfig = Field(default_factory=ProfilesConfig)
     schema_: SchemaConfig = Field(default_factory=SchemaConfig, alias="schema")
 
 

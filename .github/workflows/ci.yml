@@ -12,7 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        # 3.11 is the floor pyproject declares (spec §B1): config.py reads
+        # orlog.toml with stdlib tomllib and server_tools parses a
+        # "Z"-suffixed timestamp with fromisoformat, both 3.11 features.
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

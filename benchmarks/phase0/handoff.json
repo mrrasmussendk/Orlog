@@ -1,0 +1,111 @@
+{
+  "fixture": {
+    "decisions": 12,
+    "corrected_after_the_summary": 4,
+    "never_changed": 6,
+    "never_recorded": 2
+  },
+  "arm_a_compacted_summary": {
+    "acted_correctly": 6,
+    "acted_on_stale": 4,
+    "abstained": 2,
+    "decisions": 12
+  },
+  "arm_b_asks_orlog": {
+    "acted_correctly": 10,
+    "acted_on_stale": 0,
+    "abstained": 2,
+    "decisions": 12
+  },
+  "delta": {
+    "stale_decisions_avoided": 4,
+    "decisions_orlog_could_not_rescue": 2
+  },
+  "rows": [
+    {
+      "entity": "src/orlog/server.py",
+      "attribute": "mcp_pin",
+      "outcome": "correct",
+      "expected": "capped below 2.0",
+      "served": "src/orlog/server.py.mcp_pin = capped below 2.0"
+    },
+    {
+      "entity": "src/orlog/config.py",
+      "attribute": "toml_reader",
+      "outcome": "correct",
+      "expected": "stdlib tomllib",
+      "served": "src/orlog/config.py.toml_reader = stdlib tomllib"
+    },
+    {
+      "entity": "pyproject.toml",
+      "attribute": "python_floor",
+      "outcome": "correct",
+      "expected": "3.11",
+      "served": "pyproject.toml.python_floor = 3.11"
+    },
+    {
+      "entity": "src/orlog/storage.py",
+      "attribute": "event_count",
+      "outcome": "correct",
+      "expected": "carry a running total",
+      "served": "src/orlog/storage.py.event_count = carry a running total"
+    },
+    {
+      "entity": "src/orlog/urd.py",
+      "attribute": "serialization",
+      "outcome": "correct",
+      "expected": "JSONL, one event per line",
+      "served": "src/orlog/urd.py.serialization = JSONL, one event per line"
+    },
+    {
+      "entity": "src/orlog/urd.py",
+      "attribute": "hash_algorithm",
+      "outcome": "correct",
+      "expected": "sha256 over canonical JSON",
+      "served": "src/orlog/urd.py.hash_algorithm = sha256 over canonical JSON"
+    },
+    {
+      "entity": "src/orlog/heimdall.py",
+      "attribute": "verifier_default",
+      "outcome": "correct",
+      "expected": "windows backend",
+      "served": "src/orlog/heimdall.py.verifier_default = windows backend"
+    },
+    {
+      "entity": "src/orlog/vault.py",
+      "attribute": "encryption",
+      "outcome": "correct",
+      "expected": "AES-GCM",
+      "served": "src/orlog/vault.py.encryption = AES-GCM"
+    },
+    {
+      "entity": "src/orlog/scrub.py",
+      "attribute": "detectors",
+      "outcome": "correct",
+      "expected": "regex pack",
+      "served": "src/orlog/scrub.py.detectors = regex pack"
+    },
+    {
+      "entity": "tests/conformance",
+      "attribute": "runner",
+      "outcome": "correct",
+      "expected": "pytest, five cells",
+      "served": "tests/conformance.runner = pytest, five cells"
+    },
+    {
+      "entity": "src/orlog/muninn.py",
+      "attribute": "eviction",
+      "outcome": "abstained",
+      "expected": "LRU, bounded",
+      "served": null
+    },
+    {
+      "entity": "src/orlog/skuld.py",
+      "attribute": "decay_schedule",
+      "outcome": "abstained",
+      "expected": "nightly",
+      "served": null
+    }
+  ],
+  "caveat": "No model, no agent, no judgment. Measures whether the facts a second agent acts on are current -- not whether it does better work with them. That is the Mimir plan's Phase 6 eval."
+}

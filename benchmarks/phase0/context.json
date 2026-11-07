@@ -1,0 +1,83 @@
+{
+  "token_estimator": "chars / 3.5",
+  "deriver": "scripted (no API calls)",
+  "embedder": "hashing (offline); queries are exact-key, so retrieval is not in the loop",
+  "correctness": {
+    "stable": {
+      "n": 30,
+      "correct": 30,
+      "verified": 30,
+      "abstained": 0,
+      "accuracy_pct": 100.0,
+      "mean_answer_tokens": 122.3
+    },
+    "superseded": {
+      "n": 10,
+      "correct": 10,
+      "verified": 10,
+      "abstained": 0,
+      "accuracy_pct": 100.0,
+      "mean_answer_tokens": 118.5
+    },
+    "unknown": {
+      "n": 15,
+      "correct": 15,
+      "verified": 0,
+      "abstained": 15,
+      "accuracy_pct": 100.0,
+      "mean_answer_tokens": 62.0
+    },
+    "confidently_wrong": 0,
+    "total_questions": 55
+  },
+  "context_cost": [
+    {
+      "facts": 40,
+      "recall_tokens": 116,
+      "list_attributes_tokens": 224,
+      "recall_history_tokens": 56,
+      "list_entities_20_tokens": 100,
+      "raw_log_tokens": 4777,
+      "recall_context_precision": 1.0,
+      "raw_log_context_precision": 0.024283,
+      "tokens_saved_vs_raw": 4661,
+      "reduction_x": 41.2
+    },
+    {
+      "facts": 400,
+      "recall_tokens": 116,
+      "list_attributes_tokens": 226,
+      "recall_history_tokens": 56,
+      "list_entities_20_tokens": 392,
+      "raw_log_tokens": 47199,
+      "recall_context_precision": 1.0,
+      "raw_log_context_precision": 0.002458,
+      "tokens_saved_vs_raw": 47083,
+      "reduction_x": 406.9
+    },
+    {
+      "facts": 2000,
+      "recall_tokens": 116,
+      "list_attributes_tokens": 227,
+      "recall_history_tokens": 56,
+      "list_entities_20_tokens": 397,
+      "raw_log_tokens": 237257,
+      "recall_context_precision": 1.0,
+      "raw_log_context_precision": 0.000489,
+      "tokens_saved_vs_raw": 237141,
+      "reduction_x": 2045.3
+    },
+    {
+      "facts": 10000,
+      "recall_tokens": 116,
+      "list_attributes_tokens": 228,
+      "recall_history_tokens": 56,
+      "list_entities_20_tokens": 401,
+      "raw_log_tokens": 1191542,
+      "recall_context_precision": 1.0,
+      "raw_log_context_precision": 9.7e-05,
+      "tokens_saved_vs_raw": 1191426,
+      "reduction_x": 10271.9
+    }
+  ]
+}

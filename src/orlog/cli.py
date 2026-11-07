@@ -13,7 +13,16 @@ Design decisions:
    one workspace MUST be prevented") and releases it on exit, including on
    an unhandled exception, since it's a context manager.
 
-3. `orlog conformance` shells out to pytest against this package's own
+3. `orlog serve --http [host]:port` runs the same server over mcp's
+   streamable-HTTP transport instead of stdio (spec §B12.5). stdio stays
+   the default, and the daemon holds the workspace lock either way -- which
+   is the point of the HTTP mode: several MCP clients can share ONE writer
+   instead of each spawning its own stdio server and losing the race for
+   the lock. The listen address defaults to 127.0.0.1; this transport has
+   no authentication of its own, so binding it to anything else is an
+   explicit decision the operator has to type out.
+
+4. `orlog conformance` shells out to pytest against this package's own
    tests/conformance/ directory -- the suite "ships with the reference
    implementation" (spec §6) and --target=self runs it against THIS
    installation. A real --target=<endpoint> (a remote server) is out of
@@ -123,10 +132,46 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def parse_listen(value: str) -> tuple[str, int]:
+    """Parse `--http`'s argument: ":8787", "8787" or "0.0.0.0:8787".
+
+    Defaults to 127.0.0.1 because this transport carries no authentication
+    (spec §B12.5) -- a workspace reachable from the network because someone
+    typed a bare port number is not a default this project is willing to
+    ship.
+    """
+    from orlog.server import DEFAULT_HTTP_PORT
+
+    text = (value or "").strip()
+    host, sep, port_text = text.rpartition(":")
+    if not sep:
+        host, port_text = "", text
+    host = host.strip("[]") or "127.0.0.1"
+    if not port_text:
+        return host, DEFAULT_HTTP_PORT
+    try:
+        port = int(port_text)
+    except ValueError:
+        raise ValueError(f"{value!r} is not a listen address -- expected ':8787' or 'host:8787'") from None
+    if not 1 <= port <= 65535:
+        raise ValueError(f"port {port} is out of range (1-65535)")
+    return host, port
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from orlog.errors import RetrieverUnavailableError
     from orlog.runtime import Runtime
     from orlog.server import build_server
+
+    listen = getattr(args, "http", None)
+    if listen is not None:
+        try:
+            host, port = parse_listen(listen)
+        except ValueError as exc:
+            print(f"{exc}", file=sys.stderr)
+            return 2
+    else:
+        host = port = None
 
     ws = Workspace(args.path)
     config = load_config(ws.config_path)
@@ -150,7 +195,15 @@ def cmd_serve(args: argparse.Namespace) -> int:
                     "recall() will retry lazily and abstain (EMBEDDER_UNAVAILABLE) until it succeeds",
                     file=sys.stderr,
                 )
-            build_server(runtime).run(transport="stdio")
+            if listen is not None:
+                # One daemon, many clients: the workspace lock is held by
+                # THIS process for the life of the server, and every
+                # connected client writes through it. Over stdio each client
+                # spawns its own server and all but the first get E_LOCKED.
+                print(f"orlog serving {ws.root} on http://{host}:{port}/mcp", file=sys.stderr)
+                build_server(runtime, host=host, port=port).run(transport="streamable-http")
+            else:
+                build_server(runtime).run(transport="stdio")
         finally:
             runtime.close()
     return 0
@@ -200,6 +253,9 @@ def cmd_conformance(args: argparse.Namespace) -> int:
 
 
 def cmd_replay(args: argparse.Namespace) -> int:
+    from datetime import datetime as _datetime
+
+    from orlog.projections import ProjectionRegistry, ProjectionStore
     from orlog.storage import EventIndex, SegmentedLog
 
     ws = Workspace(args.path)
@@ -216,11 +272,31 @@ def cmd_replay(args: argparse.Namespace) -> int:
 
             index = EventIndex(ws.index_path)
             index.rebuild(log)
+
+            # §B12.2: `orlog replay` rebuilds EVERY registered projection,
+            # core's and each loaded profile's, from the log alone -- G2's
+            # "every projection can be rebuilt from the log" is not a
+            # property of supersession_chains in particular. The cache is
+            # dropped first, so what lands in the projections table is a
+            # genuine rebuild and not whatever this process was holding.
+            config = load_config(ws.config_path) if ws.config_path.exists() else None
+            registry = ProjectionRegistry.load(
+                enabled=config.profiles.enabled if config else None,
+                disabled=config.profiles.disabled if config else None,
+            )
+            store = ProjectionStore(registry, index=index)
+            built = store.rebuild_all(log.read_all(), built_at=_datetime.now(timezone.utc))
             index.close()
     except LockedError as exc:
         print(f"{exc}", file=sys.stderr)
         return 2
     print(f"index.sqlite rebuilt at {ws.index_path}")
+    for name in registry.names:
+        version = built.get(name)
+        print(
+            f"  projection {name}: "
+            + (f"rebuilt from {version.built_from}" if version else "no source events")
+        )
     return 0
 
 
@@ -247,7 +323,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
 
 def cmd_forget(args: argparse.Namespace) -> int:
-    from orlog.storage import SegmentedLog
+    from orlog.storage import EventIndex, SegmentedLog
 
     ws = Workspace(args.path)
     # Under the workspace lock: this command APPENDS (the erasure event),
@@ -270,12 +346,21 @@ def cmd_forget(args: argparse.Namespace) -> int:
                 vault.close()
 
             log = SegmentedLog(ws.events_dir)
-            log.append(
+            event = log.append(
                 EventDraft(
                     occurred_at=datetime.now(timezone.utc), actor="system", type="x.orlog.forget",
                     payload={"token": args.token},  # what was erased, not the erasure itself, per spec §B7
                 )
             )
+            # Index the erasure event too. Leaving it out left index.sqlite
+            # one event behind the log, which the next `orlog serve` repairs
+            # by rebuilding the whole thing -- a full re-index of the
+            # workspace as the price of one `orlog forget`.
+            index = EventIndex(ws.index_path)
+            try:
+                index.index_appended(log, event)
+            finally:
+                index.close()
     except LockedError as exc:
         print(f"{exc}", file=sys.stderr)
         return 2
@@ -298,8 +383,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--claude-code-name", default=None, help="mcpServers entry name to use (default: 'orlog')")
     p.set_defaults(func=cmd_init)
 
-    p = sub.add_parser("serve", help="run the MCP stdio server")
+    p = sub.add_parser("serve", help="run the MCP server (stdio by default)")
     p.add_argument("path", nargs="?", default=".")
+    p.add_argument(
+        "--http",
+        nargs="?",
+        const=":8787",
+        default=None,
+        metavar="[HOST]:PORT",
+        help=(
+            "serve over streamable HTTP instead of stdio, so several MCP clients can share "
+            "one daemon (and one writer lock). Defaults to 127.0.0.1:8787; this transport "
+            "has no authentication, so bind it beyond localhost only deliberately."
+        ),
+    )
     p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("conformance", help="run the conformance suite")

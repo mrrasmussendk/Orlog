@@ -1,5 +1,8 @@
-Orlog — Production Specification v1.0
+Orlog — Production Specification v1.1
 
+Supersedes: ORLOG-SPEC.md v1.0 (Part A is unchanged; v1.1 adds Part B's
+§B12 — profiles — and the §B1/§B2/§B5/§B9/§B10 changes that go with it,
+and removes HTTP transport from §C4's non-goals).
 Supersedes: ORLOG-SPEC.md v0.1-draft (protocol core carries over; this
 document is the complete build target).
 Deliverable: an installable MCP memory server (pip install orlog) with an
@@ -150,10 +153,15 @@ Processes: one MCP server per workspace (a directory containing
 orlog.toml + data). Single-writer: the server owns the log; concurrent
 server instances on one workspace MUST be prevented by a lockfile
 (data/orlog.lock, E_LOCKED on second start).
-CLI: orlog init (scaffold workspace), orlog serve (MCP stdio),
+CLI: orlog init (scaffold workspace), orlog serve [--http [HOST]:PORT]
+(MCP; stdio by default, streamable HTTP on request — §B12.5),
 orlog conformance [--target self|<endpoint>], orlog replay (rebuild all
 projections, verify hash chain), orlog inspect <event_id> (provenance
 chain), orlog forget <pseudonym> (crypto-shred, §B7).
+Profiles: a distribution MAY extend a deployment through the entry-point
+groups of §B12 without forking core. Which installed profiles a workspace
+loads is the workspace's decision ([profiles], §B10), not the
+interpreter's.
 
 
 B2. Storage
@@ -182,8 +190,19 @@ CREATE TABLE route_cache (key TEXT PRIMARY KEY, assertion_json TEXT,
 CREATE TABLE projections (projection TEXT, version INTEGER, built_from TEXT,
   built_at TEXT, builder TEXT, quality REAL, PRIMARY KEY (projection, version));
 
+The DDL above is a normative MINIMUM, not a closed set: an implementation
+MAY add derived tables, and the reference implementation adds three for
+§B12.4's query API — event_bodies (each event's canonical JSON, plus its
+type, its timestamps normalized to UTC, and its segment/offset), facts_idx
+(the grouping columns of a fact payload) and outcomes_idx (query_id and
+status of each outcome.* event). Timestamps in added tables SHOULD be
+normalized to UTC: ISO-8601 only orders lexicographically when every value
+carries the same offset, and a range filter that compares them as written
+silently excludes events recorded in another zone.
 MUST: index.sqlite is entirely derivable — orlog replay drops and rebuilds
-it from the log byte-identically (G2 test). Appends are fsynced before the
+it from the log byte-identically (G2 test). An added table is bound by the
+same MUST. A reader that finds the index inconsistent with the log MUST
+rebuild it rather than serve from it. Appends are fsynced before the
 append() call returns. Hash-chain verification runs on startup for the newest
 segment and full-chain on orlog replay.
 
@@ -247,6 +266,10 @@ session_summaries — per-session digest views for retrieval context
 (deterministic template in v1.0).
 
 
+Both are registered through §B12.2's projection registry, as is every
+projection a profile ships: core's own projections are not a special case
+of the mechanism, they are its first consumers. orlog replay rebuilds all
+of them.
 Rebuild triggers: explicit (orlog replay), on builder version change, and
 SHOULD on quality drop (verified-pass rate of answers citing this projection
 falling 20% below its trailing mean). New projection versions do not delete old
@@ -350,6 +373,14 @@ check_action — args: {action_description} → advisory {warnings:[…], prior_
 stats — no args → counters (§B8).
 
 
+The seven tools above are normative: their names, arguments and the
+guarantees their descriptions state are fixed, and a profile MUST NOT
+replace one (§B12.3). A profile MAY add tools alongside them; so MAY an
+embedding application, through build_server(runtime, extra_tools).
+remember additionally accepts {payload} in place of
+{entity, attribute, value} when type names a registered event type
+(§B12.1); the entity/attribute/value requirement above applies to type
+"fact" only.
 Resources: orlog://spec (this document), orlog://conformance-report (latest
 run). MUST: tool errors map to abstentions or the error taxonomy — an MCP tool
 call never returns an unverified claim as if verified.
@@ -391,7 +422,29 @@ max_entries = 10000
 detectors = ["regex"]          # +"ner"
 resolve_entities = false
 
+[profiles]                      # §B12. Which installed profiles this
+# enabled = ["mimir"]            # workspace loads. `enabled` is THREE-
+disabled = []                   # STATE: absent (the default) means every
+                                 # installed profile, as entry points
+                                 # normally work; an explicit empty list
+                                 # means NONE, the kill switch; a
+                                 # non-empty list is a strict allowlist of
+                                 # distribution names. `disabled`
+                                 # subtracts from the default and is
+                                 # ignored when `enabled` is given.
+                                 # Per-workspace, not per-interpreter: a
+                                 # profile's code types, projects and
+                                 # serves this workspace's memories, so
+                                 # which ones may is a property of the
+                                 # memories.
+
 [schema]
+known_event_types = []          # e.g. ["x.mimir.decision"] -- EVENT types
+                                 # (the `type` field on the event) this
+                                 # workspace accepts beyond core's
+                                 # vocabulary and whatever loaded profiles
+                                 # register. Distinct from known_types
+                                 # below, which is about ENTITY types.
 known_types = []                # e.g. ["person", "user"] -- entity-type
                                  # prefixes (the "person" in "person:emma")
                                  # remember() accepts without
@@ -419,6 +472,85 @@ module: — user-supplied class implementing the Verifier protocol; the
 documented extension point (this is where a law-database verifier plugs in).
 
 
+
+B12. Profiles (extension seams)
+
+A profile is an installed distribution that extends a deployment through
+the three entry-point groups below. The point of this section is that a
+profile needs no change to orlog core: core's event types, projections and
+tools are declared in code because they are normative, and a profile's are
+discovered.
+
+MUST: an entry point that fails to import is an error (E_PLUGIN), never a
+silent skip — a workspace quietly missing the profile that was supposed to
+type, project and serve its memories is indistinguishable from one that
+has no memories. MUST: discovery is filtered by [profiles] (§B10) before
+anything is imported, and a workspace MUST be able to refuse every profile
+([profiles] enabled = []) whatever is installed alongside it.
+
+B12.1 Event types — group orlog.event_types
+
+An entry point resolves to a {type_name: PayloadModel} mapping, or a
+zero-argument callable returning one; PayloadModel is a pydantic model for
+that type's payload. MUST: a registered name matches x.<vendor>.<name>;
+the vendor orlog and every core type name (fact, outcome.*, x.orlog.*) are
+reserved; a name registered by two profiles is an error. Two profiles
+sharing a type name would write two payload shapes into one append-only
+log under one name, where the collision can never be taken back out.
+remember() -- the §B9 tool, not merely the library call -- takes {payload}
+for a registered type and validates it against that model BEFORE appending; the payload is scrubbed (§B7) before
+validation, so the model certifies exactly the bytes that land in the log.
+The entity/attribute/value requirement of §B9 stays for type "fact".
+A non-fact write whose type is in none of (core's vocabulary, the
+registry, [schema] known_event_types) MUST be refused at write time.
+
+B12.2 Projections — group orlog.projections
+
+An entry point resolves to a {name: Projection} mapping. A Projection has
+`name`, `version` and build(events, *, built_at) -> (view,
+ProjectionVersion), pure in the sense §4.2 already requires. It MAY have
+selects(event) -> bool, the predicate choosing its source events from the
+log, and update(view, version, new_events, *, built_at) for an incremental
+rebuild — which MUST produce what build() would have produced over the
+same widened set. An optimization is not permitted to be a second answer.
+A profile MUST NOT register a name a core projection already uses.
+Registered projections are rebuilt by orlog replay and updated
+incrementally on append. Built views MAY be cached; a cache MUST be keyed
+by the projection, its source set and the known_as_of horizon the view was
+built under, and that horizon MUST be compared exactly rather than rounded
+into a time bucket — recorded_at is not monotonic (§A3's backfill), so two
+nearby horizons can select genuinely different event sets.
+
+B12.3 Tools — group orlog.tools
+
+An entry point resolves to a {tool_name: callable} mapping; a tool is
+(runtime, **kwargs) -> dict, the same shape §B9's own tools have. MUST:
+the seven names of §B9 are reserved. A profile that could shadow recall
+could replace the one call carrying G3/G4, decided by entry-point
+ordering. The tool's docstring is its MCP description.
+build_server(runtime, extra_tools) is the same seam for an embedding
+application with no distribution to install.
+
+B12.4 Index query API
+
+A read-only query surface over index.sqlite: events by exact type, by type
+namespace prefix, by entity prefix, by valid-time range and by known_as_of
+horizon; and the grouped scans §B9's list_entities / list_attributes /
+recall_history / check_action need. MUST: queries return events identical
+to the log's own, and comparisons on names and prefixes are
+case-sensitive. SHOULD: list_entities answers at p95 under 50 ms on a
+100k-event workspace.
+
+B12.5 HTTP transport
+
+orlog serve --http [HOST]:PORT runs the §B9 server over MCP streamable
+HTTP; stdio remains the default. MUST: the daemon holds the workspace lock
+of §B1 for its whole life, and connected clients are sessions on that one
+writer — which is the reason the transport exists, since over stdio each
+client spawns its own server and all but the first get E_LOCKED. MUST: the
+listen host defaults to loopback; this transport carries no authentication
+of its own in v1.1, so binding beyond loopback is an explicit operator
+decision.
 
 PART C — Conformance & release
 
@@ -450,13 +582,18 @@ spec, and the two benchmark-cell writeups.
 C3. Versioning & compatibility
 
 Semver. schema_version on every event; v1.x readers MUST read all 1.x events.
+A profile's x.<vendor>.* types version with the profile, not with orlog; a
+v1.x reader that meets a type no loaded profile registers MUST still read
+the event (§A1's G1 does not depend on knowing what a payload means).
 Breaking schema change ⇒ v2.0 + a migration command (orlog migrate) that
 re-emits the log in the new schema WITH a recorded lineage event — migrations
 never edit in place (G1 survives version bumps).
 
 C4. Explicit non-goals for v1.0
 
-Distributed/multi-writer logs; HTTP/remote MCP transport; TypeScript port;
+Distributed/multi-writer logs; remote/multi-tenant MCP transport beyond the
+single-machine loopback daemon of §B12.5 (authentication, TLS and
+cross-host access are still out of scope); TypeScript port;
 multi-tenant server; graph-embedding retrieval; automatic LLM-judged
 verification (contradiction of A5); UI. All deferred, none precluded by the
 contracts.

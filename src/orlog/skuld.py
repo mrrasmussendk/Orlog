@@ -49,6 +49,22 @@ class OutcomeLedger:
         self._index = index  # storage.EventIndex | None
         self._importance: dict[str, float] = {}  # used only when index is None
 
+    def _append(self, draft: EventDraft) -> Event:
+        """Append an outcome event AND index it.
+
+        The ledger used to call `self._log.append()` directly. That was
+        invisible for as long as every read re-scanned the log, and became a
+        silent correctness bug the moment check_action started reading from
+        index.sqlite: the outcomes were durably in the log and absent from
+        the index, so the governance tool reported zero prior failures for a
+        query that had abstained a dozen times. A derived cache is only
+        derived if every writer maintains it.
+        """
+        event = self._log.append(draft)
+        if self._index is not None and hasattr(self._log, "current_segment_name"):
+            self._index.index_appended(self._log, event)
+        return event
+
     # -- recording outcomes (T5: every terminal state emits an event) --
 
     def record_verification(self, result: VerificationResult) -> Event:
@@ -61,13 +77,13 @@ class OutcomeLedger:
             "truth_version": result.truth_version,
             "failures": [f.model_dump(mode="json") for f in result.failures],
         }
-        return self._log.append(
+        return self._append(
             EventDraft(occurred_at=result.checked_at, actor="system", type="outcome.verification", payload=payload)
         )
 
     def record_abstention(self, *, query_id: str, reasons: list[str], occurred_at: datetime) -> Event:
         """Append an outcome.abstention event (spec §7.1: {query_id, reasons})."""
-        return self._log.append(
+        return self._append(
             EventDraft(
                 occurred_at=occurred_at,
                 actor="system",
@@ -81,7 +97,7 @@ class OutcomeLedger:
         corrected_by, note}) and reward the corrected-to fact's importance.
         """
         self._bump_importance(corrected_to_event_id, bonus, now=occurred_at)
-        return self._log.append(
+        return self._append(
             EventDraft(
                 occurred_at=occurred_at,
                 actor=corrected_by,

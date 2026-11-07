@@ -53,7 +53,9 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          # Must be >= pyproject's requires-python; 3.10 silently stopped
+          # being installable the moment that floor moved to 3.11.
+          python-version: "3.11"
 
       - name: Install orlog and build tooling
         run: python -m pip install -e ".[anthropic,openai,dev,build]"

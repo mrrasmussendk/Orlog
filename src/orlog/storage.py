@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -35,6 +35,18 @@ from orlog.models.event import Event, EventDraft
 from orlog.urd import EventLog, _hash_of
 
 SEGMENT_ROTATE_BYTES = 64 * 1024 * 1024  # 64 MB, spec §B2
+
+
+def utc_key(moment: datetime) -> str:
+    """A timestamp normalized to UTC, as the string form the index's range
+    filters compare. See the event_bodies comment in _DDL for why the
+    normalization matters."""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).isoformat()
+
+
+_utc = utc_key
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS events_idx (
@@ -60,15 +72,76 @@ CREATE TABLE IF NOT EXISTS projections (
     built_at TEXT, builder TEXT, quality REAL,
     PRIMARY KEY (projection, version)
 );
+
+-- Spec §B2's DDL is a normative MINIMUM. The three tables below are added
+-- by §B12.4's index query API: they hold nothing that is not already in
+-- the segments, so G2 ("index.sqlite is entirely derivable") is untouched
+-- -- rebuild() drops and recomputes them exactly like the rest.
+--
+-- event_bodies keeps each event's canonical JSON so a query can return
+-- real, exact Event objects without seeking into a JSONL segment by line
+-- offset (which costs a full file scan per lookup). It makes index.sqlite
+-- roughly the size of the log; that is the price of a derived cache that
+-- can actually answer reads, and it is reclaimable at any time by deleting
+-- the file.
+--
+-- occurred_utc/recorded_utc are NORMALIZED to UTC, unlike events_idx's
+-- columns, which store each timestamp's offset exactly as it was written.
+-- Range filters compare these as strings, and ISO-8601 only sorts
+-- lexicographically when every value shares one offset -- a fact written
+-- as "2026-01-01T12:00:00+02:00" would otherwise sort after a later UTC
+-- instant and fall out of a known_as_of horizon it belongs inside. The
+-- existing columns are left exactly as they were, so §B2's normative
+-- shape and the row-for-row replay test are unaffected.
+CREATE TABLE IF NOT EXISTS event_bodies (
+    event_id TEXT PRIMARY KEY, body_json TEXT NOT NULL, type TEXT NOT NULL,
+    occurred_utc TEXT NOT NULL, recorded_utc TEXT NOT NULL,
+    segment TEXT NOT NULL, "offset" INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_bodies_type ON event_bodies(type);
+CREATE INDEX IF NOT EXISTS ix_bodies_recorded ON event_bodies(recorded_utc);
+CREATE INDEX IF NOT EXISTS ix_bodies_occurred ON event_bodies(occurred_utc);
+CREATE INDEX IF NOT EXISTS ix_bodies_order ON event_bodies(segment, "offset");
+
+-- facts_idx is the projection of a "fact" event's payload that the scan
+-- tools (list_entities, list_attributes) group and count over. Keeping the
+-- grouping columns in their own table is what turns those tools from a
+-- full log read into a single indexed GROUP BY.
+CREATE TABLE IF NOT EXISTS facts_idx (
+    event_id TEXT PRIMARY KEY, entity TEXT, entity_label TEXT, entity_detail TEXT,
+    attribute TEXT, value TEXT, occurred_utc TEXT, recorded_utc TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_facts_entity ON facts_idx(entity);
+CREATE INDEX IF NOT EXISTS ix_facts_key ON facts_idx(entity, attribute);
+CREATE INDEX IF NOT EXISTS ix_facts_recorded ON facts_idx(recorded_utc);
+-- Covers list_entities entirely: the GROUP BY and the ORDER BY both run
+-- off this index in order, and COUNT(DISTINCT attribute) reads it without
+-- a temp B-tree. That is what lets a LIMIT stop early instead of grouping
+-- all 100k rows first (§B12.4's p95 budget).
+CREATE INDEX IF NOT EXISTS ix_facts_group ON facts_idx(entity_label, entity_detail, attribute);
+
+-- outcomes_idx is the same idea for skuld's outcome.* events, which
+-- check_action matches against.
+CREATE TABLE IF NOT EXISTS outcomes_idx (
+    event_id TEXT PRIMARY KEY, type TEXT, query_id TEXT, status TEXT, recorded_utc TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_outcomes_query ON outcomes_idx(query_id);
 """
+
+
+_DERIVED_TABLES = ("events_idx", "entities_idx", "event_bodies", "facts_idx", "outcomes_idx")
 
 
 class EventIndex:
     """SQLite index over a SegmentedLog. Entirely derivable -- see module
-    docstring point 2. Only events_idx/entities_idx are populated by
-    index_event()/rebuild() here; windows/embeddings/importance/route_cache/
-    projections are written by their owning layers (verdandi, retrieval's
-    embedder, skuld, muninn) -- this class just creates their tables.
+    docstring point 2. events_idx/entities_idx/event_bodies/facts_idx/
+    outcomes_idx are populated by index_event()/rebuild() here;
+    windows/embeddings/importance/route_cache/projections are written by
+    their owning layers (verdandi, retrieval's embedder, skuld, muninn,
+    projections.ProjectionStore) -- this class just creates their tables.
+
+    Read queries live in queries.IndexQuery (§B12.4), not here: this class
+    owns writing the index, that one owns reading it.
     """
 
     def __init__(self, path: Path | str) -> None:
@@ -77,7 +150,15 @@ class EventIndex:
         self._conn.executescript(_DDL)
         self._conn.commit()
 
-    def index_event(self, event: Event, *, segment: str, offset: int) -> None:
+    @property
+    def connection(self) -> sqlite3.Connection:
+        """Read access for queries.IndexQuery. Deliberately not a second
+        connection: SQLite would then serve it a snapshot taken before this
+        one's uncommitted writes, and a recall() issued right after a
+        remember() would miss the fact it just wrote."""
+        return self._conn
+
+    def index_event(self, event: Event, *, segment: str, offset: int, commit: bool = True) -> None:
         self._conn.execute(
             "INSERT OR REPLACE INTO events_idx (id, occurred_at, recorded_at, actor, type, segment, offset) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -86,17 +167,110 @@ class EventIndex:
         self._conn.execute("DELETE FROM entities_idx WHERE event_id = ?", (event.id,))
         for entity in event.entities:
             self._conn.execute("INSERT INTO entities_idx (event_id, entity) VALUES (?, ?)", (event.id, entity))
+        self._conn.execute(
+            "INSERT OR REPLACE INTO event_bodies "
+            "(event_id, body_json, type, occurred_utc, recorded_utc, segment, \"offset\") "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                event.id,
+                event.model_dump_json(),
+                event.type,
+                _utc(event.occurred_at),
+                _utc(event.recorded_at),
+                segment,
+                offset,
+            ),
+        )
+        self._index_payload(event)
+        if commit:
+            self._conn.commit()
+
+    def _index_payload(self, event: Event) -> None:
+        """Project the payload shapes the scan tools group over. A payload
+        that does not match (a profile's own x.<vendor>.* event, a
+        text-only outcome) simply contributes no row -- it is still fully
+        present in event_bodies, so nothing is lost."""
+        self._conn.execute("DELETE FROM facts_idx WHERE event_id = ?", (event.id,))
+        self._conn.execute("DELETE FROM outcomes_idx WHERE event_id = ?", (event.id,))
+        payload = event.payload
+        if event.type == "fact" and payload.get("entity") is not None and payload.get("attribute") is not None:
+            self._conn.execute(
+                "INSERT INTO facts_idx (event_id, entity, entity_label, entity_detail, attribute, "
+                "value, occurred_utc, recorded_utc) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    event.id,
+                    payload["entity"],
+                    payload.get("entity_label") or payload["entity"],
+                    payload.get("entity_detail"),
+                    payload["attribute"],
+                    payload.get("value"),
+                    _utc(event.occurred_at),
+                    _utc(event.recorded_at),
+                ),
+            )
+        elif event.type.startswith("outcome."):
+            self._conn.execute(
+                "INSERT INTO outcomes_idx (event_id, type, query_id, status, recorded_utc) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    event.id,
+                    event.type,
+                    payload.get("query_id") or payload.get("assertion_query_id") or "",
+                    payload.get("status"),
+                    _utc(event.recorded_at),
+                ),
+            )
+
+    def index_appended(self, log: "SegmentedLog", event: Event) -> None:
+        """Index an event that was just appended to `log`, reading its
+        location from the log itself.
+
+        Every writer has to do this, or the index silently falls behind the
+        thing it is derived from -- which is precisely what happened to
+        skuld's outcome events once reads started coming from the index.
+        Giving the two-line dance one name means a new writer cannot get it
+        subtly wrong.
+        """
+        self.index_event(event, segment=log.current_segment_name(), offset=log.current_segment_offset())
+
+    def record_projection(self, version) -> None:
+        """Write (or refresh) a projection's version row -- §B5's
+        `projections` table, which nothing wrote before the projection
+        registry existed."""
+        self._conn.execute(
+            "INSERT OR REPLACE INTO projections (projection, version, built_from, built_at, builder, quality) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                version.projection,
+                version.version,
+                version.built_from,
+                version.built_at.isoformat(),
+                version.builder,
+                version.quality,
+            ),
+        )
         self._conn.commit()
 
+    def event_count(self) -> int:
+        """How many events this index covers. Compared against the log's
+        own count at startup to notice an index that is stale or predates a
+        schema addition, and rebuild it -- it is a derived cache, so
+        rebuilding is always the correct repair."""
+        return int(self._conn.execute("SELECT COUNT(*) FROM events_idx").fetchone()[0])
+
     def rebuild(self, log: "SegmentedLog") -> None:
-        """Drop and rebuild events_idx/entities_idx from the segments --
-        the G2 test: index.sqlite must be reproducible byte-for-byte in
-        content (row-for-row; SQLite's own file bytes are not compared).
+        """Drop and rebuild every derived table from the segments -- the G2
+        test: index.sqlite must be reproducible byte-for-byte in content
+        (row-for-row; SQLite's own file bytes are not compared).
         """
-        self._conn.executescript("DELETE FROM events_idx; DELETE FROM entities_idx;")
-        self._conn.commit()
+        self._conn.executescript("".join(f"DELETE FROM {t}; " for t in _DERIVED_TABLES))
+        # One transaction for the whole rebuild, not one per event: a
+        # per-event commit() fsyncs, which made `orlog replay` on a 100k
+        # log take minutes of pure disk flush for a cache that is worthless
+        # until the rebuild finishes anyway.
         for event, segment, offset in log.iter_with_location():
-            self.index_event(event, segment=segment, offset=offset)
+            self.index_event(event, segment=segment, offset=offset, commit=False)
+        self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
@@ -131,6 +305,15 @@ class SegmentedLog:
         # and re-parsing the whole segment every time -- computed once here
         # (and again on rotation below), never inside append() itself.
         self._current_segment_count = len(self._current.read_all())
+        # Running total across every segment. event_count() used to re-read
+        # and re-parse every segment on each call, and _write_head() calls
+        # it on EVERY append -- so appending N events cost O(N^2) line
+        # parses, which is minutes of CPU well before the 100k-event scale
+        # §C2 requires `orlog replay` to handle. Counted once here, kept in
+        # step by append().
+        self._total_count = sum(
+            len(EventLog(p, clock=self._clock).read_all()) for p in self._segment_paths[:-1]
+        ) + self._current_segment_count
 
     def _next_segment_path(self) -> Path:
         """The next unused log-NNNNN.jsonl.
@@ -169,6 +352,7 @@ class SegmentedLog:
             self._current_segment_count = 0
         event = self._current.append(draft, recorded_at=recorded_at)
         self._current_segment_count += 1
+        self._total_count += 1
         self._write_head(event)
         return event
 
@@ -195,7 +379,7 @@ class SegmentedLog:
         )
 
     def event_count(self) -> int:
-        return sum(len(EventLog(p, clock=self._clock).read_all()) for p in self._segment_paths)
+        return self._total_count
 
     def _read_head(self) -> dict | None:
         if not self._head_path.exists():
@@ -216,6 +400,9 @@ class SegmentedLog:
         the current segment -- matches iter_with_location()'s numbering, so
         a live index_event() call stays consistent with a full rebuild()."""
         return self._current_segment_count - 1
+
+    def current_segment_name(self) -> str:
+        return self._current.path.name
 
     def get(self, event_id: str) -> Event | None:
         for path in reversed(self._segment_paths):  # newest segment first: recent lookups are the common case
