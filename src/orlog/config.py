@@ -155,10 +155,22 @@ class ProfilesConfig(BaseModel):
     A profile is a distribution that extends orlog through entry points --
     event types, projections and tools. Discovery is the usual
     entry-point mechanism, so by default every installed profile loads,
-    exactly as pytest loads its plugins. `enabled`, when non-empty, turns
-    that into a strict allowlist of distribution names: nothing else loads,
-    however many are installed alongside. `disabled` subtracts from the
-    default instead.
+    exactly as pytest loads its plugins.
+
+    `enabled` has three states, and the empty list is NOT the default one.
+    Absent (None, what an orlog.toml with no `enabled` key gives) means
+    "every installed profile". An explicit empty list means "none" -- the
+    kill switch, for a workspace that wants its log reachable only by core,
+    whatever happens to be installed in the interpreter. A non-empty list
+    is a strict allowlist of distribution names.
+
+    Reading `[]` as "all" would leave no way to say "none" at all, and
+    would make `enabled = []` mean the opposite of what it reads like --
+    on the one setting whose entire job is deciding whose code gets to see
+    this workspace's memories.
+
+    `disabled` subtracts from the default instead, and is ignored when
+    `enabled` is given.
 
     Both are per-WORKSPACE rather than per-interpreter on purpose. A
     profile's code gets to type, project and serve this workspace's
@@ -167,7 +179,7 @@ class ProfilesConfig(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
-    enabled: list[str] = Field(default_factory=list)
+    enabled: list[str] | None = None
     disabled: list[str] = Field(default_factory=list)
 
 

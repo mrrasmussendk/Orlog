@@ -103,24 +103,29 @@ def runtime(tmp_path, installed_refplugin):
 def test_all_three_groups_are_discovered_through_real_entry_points(installed_refplugin):
     for group in (EVENT_TYPES_GROUP, PROJECTIONS_GROUP, TOOLS_GROUP):
         loaded = load_group(group)
-        assert [e.distribution for e in loaded] == [DIST_NAME], group
+        assert DIST_NAME in [e.distribution for e in loaded], group
 
 
 def test_the_reference_plugin_registers_one_type_one_projection_and_one_tool(installed_refplugin):
-    assert EventTypeRegistry.load().names == {"x.refplugin.note"}
+    # Scoped with the allowlist rather than asserting a global set: an
+    # orlog profile installed in the same interpreter is a perfectly
+    # ordinary thing for a developer to have, and this suite must not
+    # depend on whether they do.
+    only = {"enabled": [DIST_NAME]}
+    assert EventTypeRegistry.load(**only).names == {"x.refplugin.note"}
     # Core's own two projections are always there; the plugin adds a third.
-    assert ProjectionRegistry.load().names == (
+    assert ProjectionRegistry.load(**only).names == (
         "supersession_chains",
         "session_summaries",
         "notes_by_topic",
     )
-    assert ToolRegistry.load().names == ("notes_about",)
+    assert ToolRegistry.load(**only).names == ("notes_about",)
 
 
 def test_nothing_is_discovered_when_the_profile_is_not_installed():
-    assert load_group(EVENT_TYPES_GROUP) == []
-    assert EventTypeRegistry.load().names == frozenset()
-    assert ToolRegistry.load().names == ()
+    assert DIST_NAME not in [e.distribution for e in load_group(EVENT_TYPES_GROUP)]
+    assert "x.refplugin.note" not in EventTypeRegistry.load().names
+    assert "notes_about" not in ToolRegistry.load().names
 
 
 # -- the workspace decides which profiles load ------------------------------
@@ -130,11 +135,11 @@ def test_enabled_is_a_strict_allowlist(installed_refplugin):
     assert EventTypeRegistry.load(enabled=[DIST_NAME]).names == {"x.refplugin.note"}
     # A workspace that allowlists some OTHER distribution gets nothing from
     # this one, however installed it is -- the allowlist is not a hint.
-    assert EventTypeRegistry.load(enabled=["something-else"]).names == frozenset()
+    assert "x.refplugin.note" not in EventTypeRegistry.load(enabled=["something-else"]).names
 
 
 def test_disabled_subtracts_from_the_default(installed_refplugin):
-    assert EventTypeRegistry.load(disabled=[DIST_NAME]).names == frozenset()
+    assert "x.refplugin.note" not in EventTypeRegistry.load(disabled=[DIST_NAME]).names
 
 
 def test_a_disabled_profiles_types_are_not_writable(tmp_path, installed_refplugin):
@@ -217,3 +222,35 @@ def test_a_profile_tool_is_served_alongside_cores(runtime):
 
     spec = ToolRegistry.load().get("notes_about")
     assert spec.func(runtime, topic="plan")["notes"][0]["body"] == "a"
+
+
+def test_enabled_is_three_state(installed_refplugin, tmp_path):
+    """Absent means every installed profile; an explicit empty list means
+    none. Reading [] as "all" would leave a workspace no way to refuse
+    third-party code at all."""
+    assert "x.refplugin.note" in EventTypeRegistry.load().names            # absent -> all
+    assert EventTypeRegistry.load(enabled=[]).names == frozenset()         # [] -> none
+    assert EventTypeRegistry.load(enabled=[DIST_NAME]).names == {"x.refplugin.note"}
+
+    # And the config default must be the "absent" state, not the empty one.
+    assert ProfilesConfig().enabled is None
+
+    ws = Workspace(tmp_path / "none")
+    runtime = Runtime(ws, _config(enabled=[]))
+    try:
+        assert runtime.types.names == frozenset()
+        assert runtime.projections.names == ("supersession_chains", "session_summaries")
+    finally:
+        runtime.close()
+
+
+def test_an_orlog_toml_with_no_profiles_table_still_loads_profiles(tmp_path, installed_refplugin):
+    """The default has to survive a round trip through orlog.toml --
+    save/load must not turn "absent" into "[]" and silently switch every
+    existing workspace to loading nothing."""
+    from orlog.config import load_config, save_config
+
+    path = tmp_path / "orlog.toml"
+    save_config(_config(), path)
+    assert load_config(path).profiles.enabled is None
+    assert "enabled" not in path.read_text(encoding="utf-8")

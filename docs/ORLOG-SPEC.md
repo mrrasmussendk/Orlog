@@ -423,12 +423,15 @@ detectors = ["regex"]          # +"ner"
 resolve_entities = false
 
 [profiles]                      # §B12. Which installed profiles this
-enabled = []                    # workspace loads. Empty (default): every
-disabled = []                   # installed profile, as entry points
-                                 # normally work. Non-empty `enabled` is a
-                                 # STRICT allowlist of distribution names
-                                 # and nothing else loads; `disabled`
-                                 # subtracts from the default instead.
+# enabled = ["mimir"]            # workspace loads. `enabled` is THREE-
+disabled = []                   # STATE: absent (the default) means every
+                                 # installed profile, as entry points
+                                 # normally work; an explicit empty list
+                                 # means NONE, the kill switch; a
+                                 # non-empty list is a strict allowlist of
+                                 # distribution names. `disabled`
+                                 # subtracts from the default and is
+                                 # ignored when `enabled` is given.
                                  # Per-workspace, not per-interpreter: a
                                  # profile's code types, projects and
                                  # serves this workspace's memories, so
@@ -482,7 +485,8 @@ MUST: an entry point that fails to import is an error (E_PLUGIN), never a
 silent skip — a workspace quietly missing the profile that was supposed to
 type, project and serve its memories is indistinguishable from one that
 has no memories. MUST: discovery is filtered by [profiles] (§B10) before
-anything is imported.
+anything is imported, and a workspace MUST be able to refuse every profile
+([profiles] enabled = []) whatever is installed alongside it.
 
 B12.1 Event types — group orlog.event_types
 
@@ -493,8 +497,8 @@ the vendor orlog and every core type name (fact, outcome.*, x.orlog.*) are
 reserved; a name registered by two profiles is an error. Two profiles
 sharing a type name would write two payload shapes into one append-only
 log under one name, where the collision can never be taken back out.
-remember() takes {payload} for a registered type and validates it against
-that model BEFORE appending; the payload is scrubbed (§B7) before
+remember() -- the §B9 tool, not merely the library call -- takes {payload}
+for a registered type and validates it against that model BEFORE appending; the payload is scrubbed (§B7) before
 validation, so the model certifies exactly the bytes that land in the log.
 The entity/attribute/value requirement of §B9 stays for type "fact".
 A non-fact write whose type is in none of (core's vocabulary, the

@@ -84,7 +84,8 @@ def _empty_abstention(as_of: datetime, reason: str) -> dict:
 
 
 def remember_tool(
-    runtime: Runtime, text: str, *, occurred_at: str | None = None,
+    runtime: Runtime, text: str = "", *, payload: dict | None = None,
+    occurred_at: str | None = None,
     recorded_at: str | None = None, type: str = "fact",
     actor: str = "user", entity: str | None = None, attribute: str | None = None, value: str | None = None,
     entity_detail: str | None = None, evidence_span: str | None = None,
@@ -93,7 +94,10 @@ def remember_tool(
 ) -> dict:
     """spec §B9: {text, occurred_at?, type?="fact", actor?="user", entity,
     attribute, value, entity_detail?, evidence_span?, register_new_type?,
-    register_new_attribute?} -> {event_id}. entity/attribute/value are
+    register_new_attribute?} -> {event_id}, OR {payload, type} when `type`
+    names a registered event type (§B12.1), in which case the payload is
+    validated against that type's own model and entity/attribute/value do
+    not apply. For type="fact", entity/attribute/value are
     REQUIRED together -- a text-only memory is not retrievable via
     recall()/recall_history() in this reference server, so
     Runtime.remember() rejects it outright. Raises orlog.errors.SchemaError
@@ -105,7 +109,7 @@ def remember_tool(
     occurred = _parse_datetime(occurred_at) if occurred_at else datetime.now(timezone.utc)
     recorded = _parse_datetime(recorded_at) if recorded_at else None
     event = runtime.remember(
-        text, occurred_at=occurred, recorded_at=recorded, event_type=type, actor=actor,
+        text, payload=payload, occurred_at=occurred, recorded_at=recorded, event_type=type, actor=actor,
         entity=entity, attribute=attribute, value=value, entity_detail=entity_detail,
         evidence_span=evidence_span, paraphrased_value=paraphrased_value,
         register_new_type=register_new_type, register_new_attribute=register_new_attribute,
@@ -405,5 +409,18 @@ def check_action_tool(runtime: Runtime, action_description: str) -> dict:
 
 
 def stats_tool(runtime: Runtime) -> dict:
-    """spec §B9: no args -> counters (spec §B8)."""
-    return runtime.stats.snapshot()
+    """spec §B9: no args -> counters (spec §B8), plus the projection
+    cache's own (§B12.2).
+
+    The cache counters are here rather than on Stats because Stats is a
+    pure counter object with no reference to the store. They matter
+    operationally: `misses` climbing with `recalls` means something is
+    invalidating the view on every call, and a projection rebuilt per
+    recall is the difference between a 1ms answer and a full re-projection
+    of the workspace -- which is exactly the behaviour §B12.2's cache
+    exists to remove, so it should be observable rather than inferred from
+    latency.
+    """
+    snapshot = runtime.stats.snapshot()
+    snapshot["projections"] = runtime.projection_store.stats()
+    return snapshot

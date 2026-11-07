@@ -1,0 +1,111 @@
+{
+  "before": "Linux-6.18.44-fc-v310-x86_64-with-glibc2.39",
+  "python": "3.12.3",
+  "rows": [
+    {
+      "events": 250,
+      "ingest": {
+        "before_events_per_s": 105.3,
+        "after_events_per_s": 255.2,
+        "speedup": "2.4x"
+      },
+      "ops": {
+        "recall": {
+          "before_p50_ms": 14.588,
+          "after_p50_ms": 7.972,
+          "speedup": "1.8x"
+        },
+        "recall_history": {
+          "before_p50_ms": 4.312,
+          "after_p50_ms": 0.022,
+          "speedup": "196.0x"
+        },
+        "list_entities": {
+          "before_p50_ms": 4.376,
+          "after_p50_ms": 0.112,
+          "speedup": "39.1x"
+        },
+        "list_attributes": {
+          "before_p50_ms": 4.326,
+          "after_p50_ms": 0.063,
+          "speedup": "68.7x"
+        },
+        "check_action": {
+          "before_p50_ms": 4.207,
+          "after_p50_ms": 0.014,
+          "speedup": "300.5x"
+        }
+      }
+    },
+    {
+      "events": 1000,
+      "ingest": {
+        "before_events_per_s": 39.5,
+        "after_events_per_s": 256.8,
+        "speedup": "6.5x"
+      },
+      "ops": {
+        "recall": {
+          "before_p50_ms": 59.583,
+          "after_p50_ms": 20.439,
+          "speedup": "2.9x"
+        },
+        "recall_history": {
+          "before_p50_ms": 17.744,
+          "after_p50_ms": 0.068,
+          "speedup": "260.9x"
+        },
+        "list_entities": {
+          "before_p50_ms": 22.126,
+          "after_p50_ms": 0.283,
+          "speedup": "78.2x"
+        },
+        "list_attributes": {
+          "before_p50_ms": 24.752,
+          "after_p50_ms": 0.248,
+          "speedup": "99.8x"
+        },
+        "check_action": {
+          "before_p50_ms": 17.607,
+          "after_p50_ms": 0.013,
+          "speedup": "1354.4x"
+        }
+      }
+    },
+    {
+      "events": 2500,
+      "ingest": {
+        "before_events_per_s": 17.2,
+        "after_events_per_s": 245.3,
+        "speedup": "14.3x"
+      },
+      "ops": {
+        "recall": {
+          "before_p50_ms": 145.605,
+          "after_p50_ms": 46.994,
+          "speedup": "3.1x"
+        },
+        "recall_history": {
+          "before_p50_ms": 50.705,
+          "after_p50_ms": 0.132,
+          "speedup": "384.1x"
+        },
+        "list_entities": {
+          "before_p50_ms": 59.662,
+          "after_p50_ms": 0.448,
+          "speedup": "133.2x"
+        },
+        "list_attributes": {
+          "before_p50_ms": 54.707,
+          "after_p50_ms": 0.585,
+          "speedup": "93.5x"
+        },
+        "check_action": {
+          "before_p50_ms": 55.513,
+          "after_p50_ms": 0.017,
+          "speedup": "3265.5x"
+        }
+      }
+    }
+  ]
+}

@@ -200,3 +200,51 @@ def test_a_typed_event_does_not_disturb_the_fact_pipeline(runtime, registered_de
     runtime.remember(payload={"claim": "unrelated"}, event_type=registered_decision)
     pipeline = runtime.build_pipeline(now=datetime(2030, 1, 1, tzinfo=timezone.utc))
     assert list(pipeline.view.chains) == ["user:1::plan"]
+
+
+# -- the MCP surface, not just Runtime -------------------------------------
+
+
+def test_remember_tool_accepts_a_typed_payload(runtime, registered_decision):
+    """Runtime.remember() grew a `payload` argument; the tool in front of it
+    has to grow one too, or the seam exists only for callers who have
+    already imported orlog -- which is every caller except the MCP client
+    the seam is for."""
+    from orlog.server_tools import remember_tool
+
+    result = remember_tool(runtime, type=registered_decision, payload={"claim": "pin mcp below 2"})
+
+    (event,) = runtime.query.events(types=[registered_decision])
+    assert result == {"event_id": event.id}
+    assert event.payload["claim"] == "pin mcp below 2"
+
+
+def test_remember_over_the_real_mcp_surface_takes_a_typed_payload(runtime, registered_decision):
+    import anyio
+
+    from orlog.server import build_server
+
+    server = build_server(runtime)
+    (tool,) = [t for t in anyio.run(server.list_tools) if t.name == "remember"]
+    assert "payload" in tool.inputSchema["properties"]
+    assert "text" not in tool.inputSchema.get("required", [])
+
+    anyio.run(
+        lambda: server.call_tool(
+            "remember", {"type": registered_decision, "payload": {"claim": "over mcp"}}
+        )
+    )
+    (event,) = runtime.query.events(types=[registered_decision])
+    assert event.payload["claim"] == "over mcp"
+
+
+def test_remember_over_mcp_still_requires_eav_for_a_fact(runtime):
+    import anyio
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    from orlog.server import build_server
+
+    server = build_server(runtime)
+    with pytest.raises(ToolError) as exc:
+        anyio.run(lambda: server.call_tool("remember", {"text": "just text"}))
+    assert "entity, attribute, and value" in str(exc.value)

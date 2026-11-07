@@ -83,13 +83,31 @@ def build_server(
 
     @mcp.tool()
     def remember(
-        text: str, occurred_at: str | None = None, recorded_at: str | None = None,
+        text: str = "", payload: dict | None = None,
+        occurred_at: str | None = None, recorded_at: str | None = None,
         type: str = "fact", actor: str = "user",
         entity: str | None = None, attribute: str | None = None, value: str | None = None,
         entity_detail: str | None = None, evidence_span: str | None = None,
         register_new_type: bool = False, register_new_attribute: bool = False,
     ) -> dict:
         """Append a scrubbed memory to the log. Returns {event_id}.
+
+        There are two ways to call this, chosen by `type`.
+
+        For `type="fact"` (the default, and this reference server's own
+        queryable shape), pass `text` plus entity/attribute/value, as
+        described below.
+
+        For a `type` registered by an installed profile (an
+        `x.<vendor>.*` name -- see the server's own list of known event
+        types), pass `payload` instead: a dict validated against that
+        type's own model before anything is appended. `text` and
+        entity/attribute/value do not apply to a typed write and are
+        rejected, because a typed event carries its content in its
+        payload and a second place to put it would be a second place to
+        lose it. A `type` that is neither "fact" nor a known event type
+        is rejected outright rather than durably logged under a name
+        nobody will look for.
 
         entity, attribute, AND value are all REQUIRED (alongside text) --
         those three make it a queryable fact (key "{entity}.{attribute}"),
@@ -175,7 +193,7 @@ def build_server(
         known_as_of. It may not precede occurred_at.
         """
         return remember_tool(
-            runtime, text, occurred_at=occurred_at, recorded_at=recorded_at, type=type, actor=actor,
+            runtime, text, payload=payload, occurred_at=occurred_at, recorded_at=recorded_at, type=type, actor=actor,
             entity=entity, attribute=attribute, value=value, entity_detail=entity_detail,
             evidence_span=evidence_span,
             register_new_type=register_new_type, register_new_attribute=register_new_attribute,

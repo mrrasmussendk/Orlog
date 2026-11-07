@@ -105,7 +105,9 @@ def _facts(runtime, n, *, entity="user:1"):
 
 
 def test_core_projections_are_registered_through_the_same_seam():
-    registry = ProjectionRegistry.load()
+    # enabled=[] is the kill switch: core's own projections and nothing
+    # else, whatever profiles are installed in this interpreter.
+    registry = ProjectionRegistry.load(enabled=[])
     assert registry.names == ("supersession_chains", "session_summaries")
     assert isinstance(registry.get("supersession_chains"), SupersessionChains)
     assert isinstance(registry.get("session_summaries"), SessionSummaries)

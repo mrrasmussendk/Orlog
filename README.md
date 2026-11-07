@@ -161,6 +161,11 @@ cd myproject && orlog serve   # MCP stdio server
 
 ![orlog vs Mem0 headline numbers](benchmarks/vs_mem0/images/dashboard-hero.png)
 
+There is also a [Phase 0 before/after
+benchmark](benchmarks/phase0/README.md) measuring what the §B12 seams cost
+and save — ingest 14× faster at 2,500 events, the scan tools 94–3265×, and
+an honest note on the one call that did not get flat. It needs no API keys.
+
 Same facts, same questions, both systems for real — no mocks, no LLM judge,
 100 independent runs. orlog wins accuracy (97.5% vs. 75%) and correct
 abstention (80% vs. 0%) decisively, and its worst single run still beat
@@ -327,7 +332,8 @@ mimir = "mimir.projections:PROJECTIONS"   # {"decisions_by_topic": DecisionsByTo
 mimir = "mimir.tools:TOOLS"               # {"decisions_about": decisions_about}
 ```
 
-Then `remember(payload={...}, type="x.mimir.decision")` validates against
+Then `remember(type="x.mimir.decision", payload={...})` — over MCP, not just
+from Python — validates against
 your model before anything is appended, `orlog replay` rebuilds your
 projection from the log, and your tools are served next to orlog's own.
 Core's seven tool names and its own event types are reserved — a profile
@@ -336,7 +342,9 @@ loads, in `orlog.toml`:
 
 ```toml
 [profiles]
-enabled = ["mimir"]   # strict allowlist; or use `disabled` to subtract
+enabled = ["mimir"]   # strict allowlist. Omit the key for "every installed
+                      # profile"; set it to [] to load none at all. Or use
+                      # `disabled` to subtract from the default.
 ```
 
 `tests/fixtures/orlog_refplugin/` is a working no-op profile exercising all
@@ -381,6 +389,14 @@ distribution rather than monkeypatching discovery.
   merged `known_types`; keeping them apart means declaring an entity type
   `person` does not also authorize an event type named `person`, and it
   leaves every existing `orlog.toml` reading the way it did.
+- `recall` is still O(workspace) per call. The projection cache (§B12.2)
+  removed one of three linear passes, but re-materializing every fact
+  `Event` from the index and rebuilding the verifier's ground-truth table
+  are both still per-call — 38 of 42 ms at 2,500 events. Numbers and the
+  profile: [`benchmarks/phase0/README.md`](benchmarks/phase0/README.md).
+  The scan tools (`list_entities`, `list_attributes`, `recall_history`,
+  `check_action`) ARE flat; `recall` is not, and it needs to be before the
+  Mímir plan's Phase 4 latency target.
 - `orlog serve --http` has no authentication, no TLS and no multi-tenancy.
   It is a single-machine daemon so several MCP clients can share one
   writer, not a remote server — `ORLOG-SPEC.md` §C4 still defers that.

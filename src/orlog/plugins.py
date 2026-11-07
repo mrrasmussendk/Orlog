@@ -17,12 +17,13 @@ Design decisions:
    plugin boundary too.
 
 2. Loading is *filtered by the workspace*, not global. `[profiles] enabled`
-   (orlog.toml §B10), when non-empty, is a strict allowlist of distribution
-   names -- nothing else loads, however many profiles happen to be
-   installed in the same interpreter. `disabled` subtracts from the default
-   "everything installed". A workspace therefore pins exactly which
-   third-party code gets to see its log, which matters rather more here
-   than it does for a test runner.
+   (orlog.toml §B10) is three-state: absent means "everything installed",
+   an empty list means "nothing", and a non-empty list is a strict
+   allowlist of distribution names. `disabled` subtracts from the default
+   instead. A workspace therefore pins exactly which third-party code gets
+   to see its log, which matters rather more here than it does for a test
+   runner -- and can refuse all of it, which is why the empty list had to
+   mean "none" rather than "all".
 
 3. `register()` exists alongside entry points so this package's own tests
    (and an embedding application that never installs a distribution at all)
@@ -107,15 +108,13 @@ def _installed(group: str) -> Iterator[EntryPoint]:
 
 
 def _allowed(distribution: str, enabled: Iterable[str] | None, disabled: Iterable[str] | None) -> bool:
-    enabled = list(enabled or [])
-    disabled = list(disabled or [])
-    if enabled:
-        # A non-empty allowlist is strict: `<local>` plugins registered by an
-        # embedding application are only loaded if named, same as any
-        # installed distribution. Anything else would make the allowlist a
-        # suggestion.
-        return distribution in enabled
-    return distribution not in disabled
+    if enabled is not None:
+        # An allowlist is strict, including when it is empty: `<local>`
+        # plugins registered by an embedding application are only loaded if
+        # named, same as any installed distribution. Anything else would
+        # make the allowlist a suggestion.
+        return distribution in list(enabled)
+    return distribution not in list(disabled or [])
 
 
 def load_group(

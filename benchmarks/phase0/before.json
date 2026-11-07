@@ -1,0 +1,181 @@
+{
+  "python": "3.11.18",
+  "platform": "Linux-6.18.44-fc-v310-x86_64-with-glibc2.39",
+  "orlog_has_index_query_api": false,
+  "scales": [
+    {
+      "events": 250,
+      "ingest": {
+        "total_s": 2.375,
+        "per_event_ms": 9.498,
+        "events_per_s": 105.3
+      },
+      "recall": {
+        "n": 30,
+        "p50_ms": 14.588,
+        "p95_ms": 25.355,
+        "mean_ms": 15.805
+      },
+      "recall_history": {
+        "n": 30,
+        "p50_ms": 4.312,
+        "p95_ms": 4.785,
+        "mean_ms": 4.671
+      },
+      "list_entities": {
+        "n": 30,
+        "p50_ms": 4.376,
+        "p95_ms": 4.654,
+        "mean_ms": 4.717
+      },
+      "list_attributes": {
+        "n": 30,
+        "p50_ms": 4.326,
+        "p95_ms": 4.649,
+        "mean_ms": 4.682
+      },
+      "check_action": {
+        "n": 30,
+        "p50_ms": 4.207,
+        "p95_ms": 5.155,
+        "mean_ms": 4.622
+      },
+      "stats": {
+        "appends": 250,
+        "recalls": 31,
+        "cache_hits": 30,
+        "cache_evicts": 0,
+        "verifications": {
+          "pass": 31,
+          "fail": {}
+        },
+        "abstentions": {
+          "by_reason": {}
+        },
+        "rederivations": 0,
+        "tokens": {
+          "in": 0,
+          "out": 0
+        },
+        "p50_ms": 8.377285999813466,
+        "p95_ms": 9.640317000048526
+      }
+    },
+    {
+      "events": 1000,
+      "ingest": {
+        "total_s": 25.315,
+        "per_event_ms": 25.315,
+        "events_per_s": 39.5
+      },
+      "recall": {
+        "n": 30,
+        "p50_ms": 59.583,
+        "p95_ms": 78.933,
+        "mean_ms": 60.251
+      },
+      "recall_history": {
+        "n": 30,
+        "p50_ms": 17.744,
+        "p95_ms": 27.85,
+        "mean_ms": 20.172
+      },
+      "list_entities": {
+        "n": 30,
+        "p50_ms": 22.126,
+        "p95_ms": 40.337,
+        "mean_ms": 24.198
+      },
+      "list_attributes": {
+        "n": 30,
+        "p50_ms": 24.752,
+        "p95_ms": 37.706,
+        "mean_ms": 26.515
+      },
+      "check_action": {
+        "n": 30,
+        "p50_ms": 17.607,
+        "p95_ms": 30.273,
+        "mean_ms": 19.554
+      },
+      "stats": {
+        "appends": 1000,
+        "recalls": 31,
+        "cache_hits": 30,
+        "cache_evicts": 0,
+        "verifications": {
+          "pass": 31,
+          "fail": {}
+        },
+        "abstentions": {
+          "by_reason": {}
+        },
+        "rederivations": 0,
+        "tokens": {
+          "in": 0,
+          "out": 0
+        },
+        "p50_ms": 25.074743999994098,
+        "p95_ms": 41.269241999998485
+      }
+    },
+    {
+      "events": 2500,
+      "ingest": {
+        "total_s": 145.166,
+        "per_event_ms": 58.066,
+        "events_per_s": 17.2
+      },
+      "recall": {
+        "n": 30,
+        "p50_ms": 145.605,
+        "p95_ms": 198.487,
+        "mean_ms": 150.727
+      },
+      "recall_history": {
+        "n": 30,
+        "p50_ms": 50.705,
+        "p95_ms": 76.269,
+        "mean_ms": 55.844
+      },
+      "list_entities": {
+        "n": 30,
+        "p50_ms": 59.662,
+        "p95_ms": 70.404,
+        "mean_ms": 59.025
+      },
+      "list_attributes": {
+        "n": 30,
+        "p50_ms": 54.707,
+        "p95_ms": 85.376,
+        "mean_ms": 58.78
+      },
+      "check_action": {
+        "n": 30,
+        "p50_ms": 55.513,
+        "p95_ms": 72.831,
+        "mean_ms": 56.278
+      },
+      "stats": {
+        "appends": 2500,
+        "recalls": 31,
+        "cache_hits": 30,
+        "cache_evicts": 0,
+        "verifications": {
+          "pass": 31,
+          "fail": {}
+        },
+        "abstentions": {
+          "by_reason": {}
+        },
+        "rederivations": 0,
+        "tokens": {
+          "in": 0,
+          "out": 0
+        },
+        "p50_ms": 56.04038899991792,
+        "p95_ms": 90.00452600002973
+      }
+    }
+  ]
+}

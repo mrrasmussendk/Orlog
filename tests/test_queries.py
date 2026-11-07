@@ -278,3 +278,16 @@ def test_an_append_between_recalls_is_folded_into_the_cached_view(runtime):
     assert runtime.projection_store.misses == 1
     assert runtime.projection_store.incremental >= 1
     assert "pro" in str(answer["claim"])
+
+
+def test_stats_reports_the_projection_cache(runtime):
+    from orlog.server_tools import recall_tool, stats_tool
+
+    _fact(runtime, "user:1", "plan", "pro")
+    recall_tool(runtime, "user:1.plan")
+    recall_tool(runtime, "user:1.plan")
+
+    projections = stats_tool(runtime)["projections"]
+    assert projections["projection_cache_misses"] == 1
+    assert projections["projection_cache_hits"] >= 1
+    assert projections["projection_cache_entries"] == 1

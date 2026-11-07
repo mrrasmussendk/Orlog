@@ -16,7 +16,7 @@ import json
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
-from orlog.config import OrlogConfig, RetrievalConfig, WorkspaceConfig
+from orlog.config import OrlogConfig, ProfilesConfig, RetrievalConfig, WorkspaceConfig
 from orlog.runtime import Runtime
 from orlog.server import build_server
 from orlog.vault import generate_key
@@ -38,6 +38,12 @@ def runtime(tmp_path):
     config = OrlogConfig(
         workspace=WorkspaceConfig(name="mcpproject"),
         retrieval=RetrievalConfig(embedder="hashing", min_confidence=0.15, ambiguity_margin=0.85),
+        # This file pins CORE's MCP surface (§B9), which §B12 lets an
+        # installed profile add to. Without the kill switch, these tests
+        # pass or fail depending on what happens to be pip-installed in
+        # the developer's interpreter -- which is how a profile installed
+        # for an end-to-end run broke them.
+        profiles=ProfilesConfig(enabled=[]),
     )
     rt = Runtime(Workspace(tmp_path / "mcpproject"), config)
     yield rt
@@ -86,15 +92,18 @@ def test_recalls_description_reports_the_runtimes_actual_guarantee_mode(mcp, run
 
 
 def test_remembers_docstring_states_the_entityattributevalue_coupling_the_schema_cannot(mcp):
-    # FastMCP derives inputSchema.required from Python parameter defaults --
-    # confirmed live: only "text" ends up required there, even though
-    # remember_tool actually requires entity/attribute/value together too
-    # (SchemaError otherwise). A client that only reads the JSON schema,
-    # not the prose, would never learn this rule -- so the docstring is the
-    # only place this constraint is stated, and this test pins that down.
+    # FastMCP derives inputSchema.required from Python parameter defaults,
+    # and since `text` gained a default (a typed §B12.1 write carries its
+    # content in `payload` instead) NOTHING is required there -- even
+    # though remember_tool requires entity/attribute/value together for a
+    # fact, and `payload` for a registered type (SchemaError otherwise). A
+    # client that only reads the JSON schema, not the prose, would never
+    # learn either rule, so the docstring is the only place they are
+    # stated, and this test pins that down.
     remember_tool = next(t for t in _list_tools(mcp) if t.name == "remember")
-    assert remember_tool.inputSchema["required"] == ["text"]
+    assert remember_tool.inputSchema.get("required", []) == []
     assert "entity, attribute, AND value are all REQUIRED" in remember_tool.description
+    assert "pass `payload` instead" in remember_tool.description
 
 
 def test_call_tool_round_trips_remember_then_recall_over_the_real_mcp_surface(mcp):

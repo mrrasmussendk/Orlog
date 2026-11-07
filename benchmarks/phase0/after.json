@@ -1,0 +1,199 @@
+{
+  "python": "3.12.3",
+  "platform": "Linux-6.18.44-fc-v310-x86_64-with-glibc2.39",
+  "orlog_has_index_query_api": true,
+  "scales": [
+    {
+      "events": 250,
+      "ingest": {
+        "total_s": 0.98,
+        "per_event_ms": 3.919,
+        "events_per_s": 255.2
+      },
+      "recall": {
+        "n": 30,
+        "p50_ms": 7.972,
+        "p95_ms": 16.369,
+        "mean_ms": 9.086
+      },
+      "recall_history": {
+        "n": 30,
+        "p50_ms": 0.022,
+        "p95_ms": 0.056,
+        "mean_ms": 0.026
+      },
+      "list_entities": {
+        "n": 30,
+        "p50_ms": 0.112,
+        "p95_ms": 0.15,
+        "mean_ms": 0.119
+      },
+      "list_attributes": {
+        "n": 30,
+        "p50_ms": 0.063,
+        "p95_ms": 0.101,
+        "mean_ms": 0.069
+      },
+      "check_action": {
+        "n": 30,
+        "p50_ms": 0.014,
+        "p95_ms": 0.025,
+        "mean_ms": 0.015
+      },
+      "stats": {
+        "appends": 250,
+        "recalls": 31,
+        "cache_hits": 30,
+        "cache_evicts": 0,
+        "verifications": {
+          "pass": 31,
+          "fail": {}
+        },
+        "abstentions": {
+          "by_reason": {}
+        },
+        "rederivations": 0,
+        "tokens": {
+          "in": 0,
+          "out": 0
+        },
+        "p50_ms": 5.385918000001766,
+        "p95_ms": 8.584924000160754,
+        "projections": {
+          "projection_cache_hits": 30,
+          "projection_cache_misses": 1,
+          "projection_incremental_updates": 0,
+          "projection_cache_entries": 1
+        }
+      }
+    },
+    {
+      "events": 1000,
+      "ingest": {
+        "total_s": 3.895,
+        "per_event_ms": 3.895,
+        "events_per_s": 256.8
+      },
+      "recall": {
+        "n": 30,
+        "p50_ms": 20.439,
+        "p95_ms": 46.323,
+        "mean_ms": 23.988
+      },
+      "recall_history": {
+        "n": 30,
+        "p50_ms": 0.068,
+        "p95_ms": 0.165,
+        "mean_ms": 0.079
+      },
+      "list_entities": {
+        "n": 30,
+        "p50_ms": 0.283,
+        "p95_ms": 0.343,
+        "mean_ms": 0.298
+      },
+      "list_attributes": {
+        "n": 30,
+        "p50_ms": 0.248,
+        "p95_ms": 0.342,
+        "mean_ms": 0.261
+      },
+      "check_action": {
+        "n": 30,
+        "p50_ms": 0.013,
+        "p95_ms": 0.015,
+        "mean_ms": 0.014
+      },
+      "stats": {
+        "appends": 1000,
+        "recalls": 31,
+        "cache_hits": 30,
+        "cache_evicts": 0,
+        "verifications": {
+          "pass": 31,
+          "fail": {}
+        },
+        "abstentions": {
+          "by_reason": {}
+        },
+        "rederivations": 0,
+        "tokens": {
+          "in": 0,
+          "out": 0
+        },
+        "p50_ms": 7.3752640000748215,
+        "p95_ms": 8.534214999826872,
+        "projections": {
+          "projection_cache_hits": 30,
+          "projection_cache_misses": 1,
+          "projection_incremental_updates": 0,
+          "projection_cache_entries": 1
+        }
+      }
+    },
+    {
+      "events": 2500,
+      "ingest": {
+        "total_s": 10.192,
+        "per_event_ms": 4.077,
+        "events_per_s": 245.3
+      },
+      "recall": {
+        "n": 30,
+        "p50_ms": 46.994,
+        "p95_ms": 72.951,
+        "mean_ms": 48.243
+      },
+      "recall_history": {
+        "n": 30,
+        "p50_ms": 0.132,
+        "p95_ms": 0.208,
+        "mean_ms": 0.145
+      },
+      "list_entities": {
+        "n": 30,
+        "p50_ms": 0.448,
+        "p95_ms": 0.526,
+        "mean_ms": 0.459
+      },
+      "list_attributes": {
+        "n": 30,
+        "p50_ms": 0.585,
+        "p95_ms": 0.739,
+        "mean_ms": 0.593
+      },
+      "check_action": {
+        "n": 30,
+        "p50_ms": 0.017,
+        "p95_ms": 0.032,
+        "mean_ms": 0.019
+      },
+      "stats": {
+        "appends": 2500,
+        "recalls": 31,
+        "cache_hits": 30,
+        "cache_evicts": 0,
+        "verifications": {
+          "pass": 31,
+          "fail": {}
+        },
+        "abstentions": {
+          "by_reason": {}
+        },
+        "rederivations": 0,
+        "tokens": {
+          "in": 0,
+          "out": 0
+        },
+        "p50_ms": 7.751732000087941,
+        "p95_ms": 9.972801999992953,
+        "projections": {
+          "projection_cache_hits": 30,
+          "projection_cache_misses": 1,
+          "projection_incremental_updates": 0,
+          "projection_cache_entries": 1
+        }
+      }
+    }
+  ]
+}
