@@ -4,10 +4,11 @@ version = "0.0.3"
 description = "A spec-with-a-runtime for trustworthy AI agent memory."
 readme = "README.md"
 license = { text = "Apache-2.0" }
-# NOTE: the design brief asked for Python 3.11+, but only 3.10 is installed on
-# this machine (checked via `py -0p`). Relaxed to 3.10 so the project actually
-# installs here. Bump back to 3.11 once a newer interpreter is available.
-requires-python = ">=3.10"
+# 3.11 is the floor the spec states (§B1) and the floor the code now needs:
+# config.py reads orlog.toml with stdlib `tomllib`, and server_tools parses a
+# "Z"-suffixed timestamp with datetime.fromisoformat -- both 3.11 features
+# that had backport shims around them while this said 3.10.
+requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2,<3",
     # Upper-bounded deliberately: mcp 2.x renamed FastMCP to MCPServer and
@@ -18,7 +19,6 @@ dependencies = [
     "mcp>=1.0,<2",
     "python-ulid>=2",
     "cryptography>=41",
-    "tomli>=2; python_version < '3.11'",
     "tomli-w>=1",
     "fastembed>=0.4",
 ]
@@ -40,6 +40,20 @@ build = [
 [project.scripts]
 orlog = "orlog.cli:main"
 
+# The three seams a profile extends orlog through (spec §B12). orlog declares
+# no entry points of its own in these groups -- core's event types,
+# projections and tools are wired in code, because they are normative. The
+# groups exist so an installed profile (e.g. the Mimir agent-memory profile)
+# can register its own without forking core; tests/fixtures/ships a reference
+# plugin that exercises all three.
+#
+# [project.entry-points."orlog.event_types"]
+# mimir = "mimir.event_types:EVENT_TYPES"
+# [project.entry-points."orlog.projections"]
+# mimir = "mimir.projections:PROJECTIONS"
+# [project.entry-points."orlog.tools"]
+# mimir = "mimir.tools:TOOLS"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
@@ -55,8 +69,9 @@ orlog = ["spec_data/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-m", "not integration"]
+addopts = ["-m", "not integration and not perf"]
 pythonpath = ["."]
 markers = [
     "integration: makes real Anthropic API calls; requires ANTHROPIC_API_KEY, skipped otherwise",
+    "perf: builds a 100k-event workspace to measure §B12.4's scan budget; minutes, not seconds",
 ]

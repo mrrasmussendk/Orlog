@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/mrrasmussendk/Orlog/actions/workflows/ci.yml/badge.svg)](https://github.com/mrrasmussendk/Orlog/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
 > Odin feared for Huginn, but worried more for Muninn.
 > — *Grímnismál*
@@ -40,7 +40,7 @@ only stores structured facts, not free-form text blobs.
 
 ## Install
 
-Python 3.10+ required.
+Python 3.11+ required.
 
 ```bash
 git clone https://github.com/mrrasmussendk/Orlog.git
@@ -200,7 +200,7 @@ doesn't match the spec exactly.
 
 ## The Norse module map
 
-Fourteen modules, six layers, one rule: nothing reaches the world without
+Thirty modules, six layers, one rule: nothing reaches the world without
 evidence.
 
 <details>
@@ -226,6 +226,11 @@ evidence.
 | `vault.py` / `scrub.py`| —                                        | —     | PII tokenization, AES-GCM-encrypted pseudonym registry |
 | `config.py`            | —                                        | —     | `orlog.toml` |
 | `workspace.py`         | —                                        | —     | directory layout + single-writer lock |
+| `queries.py`           | —                                        | L0    | the read-only query surface over `index.sqlite` — every scan the tools do |
+| `plugins.py`           | —                                        | —     | entry-point discovery, filtered by the workspace's `[profiles]` |
+| `event_types.py`       | —                                        | —     | the `x.<vendor>.*` event-type registry + payload validation |
+| `projections.py`       | —                                        | L1    | the projection registry, its cache, and the incremental-append path |
+| `tools.py`             | —                                        | —     | the MCP tool registry; binds a profile's `(runtime, ...) -> dict` for FastMCP |
 | `runtime.py`           | —                                        | —     | wires a Workspace + Config into a live Pipeline |
 | `cli.py`               | —                                        | —     | `orlog init/serve/conformance/replay/inspect/forget` |
 | `server.py` / `server_tools.py` | —                               | —     | the MCP server: `remember`/`recall`/`recall_history`/`check_action`/`stats` |
@@ -245,12 +250,13 @@ API-key-free conformance runs; `LLMDeriver` is the real thing, swapped in via
 ```
 docs/WHAT-IS-ORLOG.md       the no-jargon introduction — start here
 docs/DESIGN-PRINCIPLES.md   design rationale
-docs/ORLOG-SPEC.md          normative protocol v1.0 — source of truth for src/orlog/
+docs/ORLOG-SPEC.md          normative protocol v1.1 — source of truth for src/orlog/
 spec/schemas/                JSON Schema contracts for the six layers
 src/orlog/models/            pydantic models mirroring the schemas
 src/orlog/                   see the module map above
 tests/                       one test per contract, plus a unit-test file per module
 tests/conformance/           C1 supersession, C2 cache staleness, C3 imperfect projection, C4 citation discipline, C5 immutability & replay
+tests/fixtures/orlog_refplugin/  the no-op reference profile: one event type, one projection, one tool
 ```
 
 ## CLI reference
@@ -258,12 +264,18 @@ tests/conformance/           C1 supersession, C2 cache staleness, C3 imperfect p
 ```
 orlog init myworkspace          # scaffold a workspace, prints a vault key to export
 orlog init myworkspace --claude-code   # ...and register it as an MCP server in Claude Code
-orlog serve                     # MCP stdio server
+orlog serve                     # MCP stdio server (one client per server)
+orlog serve --http :8787        # ...or one daemon several MCP clients share
 orlog replay                    # verify the hash chain, rebuild index.sqlite
 orlog inspect <event_id>        # provenance chain
 orlog forget <PSEUDONYM_TOKEN>  # crypto-shred
 orlog conformance               # run tests/conformance/ against this install
 ```
+
+`--http` binds to `127.0.0.1` unless you spell out a host, and carries no
+authentication of its own — it exists so several MCP clients can share one
+writer (and one workspace lock) instead of each spawning its own stdio
+server and losing the race for it.
 
 Every command except `conformance` takes an optional workspace path
 (default: the current directory), given last — `orlog inspect <event_id>
@@ -297,14 +309,47 @@ pytest
 
 Tests marked `integration` make real Anthropic API calls and are skipped by
 default; run them with `pytest -m integration` and an `ANTHROPIC_API_KEY`
-set.
+set. Tests marked `perf` build a 100k-event workspace to measure the scan
+budget and are skipped too; run them with `pytest -m perf -s`.
 
-## Known deviations from ORLOG-SPEC.md v1.0
+### Writing a profile
 
-- `pipeline.py` is 426 lines, well over this project's own ~200-line-per-file
-  guideline — it's the central orchestrator wiring every layer together
-  plus the optional stats hooks, and splitting it felt riskier than leaving
-  it, but it's a candidate for a future cleanup pass.
+A *profile* is a distribution that adds event types, projections and MCP
+tools to orlog without forking it (`ORLOG-SPEC.md` §B12). Declare entry
+points and orlog discovers them:
+
+```toml
+[project.entry-points."orlog.event_types"]
+mimir = "mimir.event_types:EVENT_TYPES"   # {"x.mimir.decision": DecisionPayload}
+[project.entry-points."orlog.projections"]
+mimir = "mimir.projections:PROJECTIONS"   # {"decisions_by_topic": DecisionsByTopic}
+[project.entry-points."orlog.tools"]
+mimir = "mimir.tools:TOOLS"               # {"decisions_about": decisions_about}
+```
+
+Then `remember(payload={...}, type="x.mimir.decision")` validates against
+your model before anything is appended, `orlog replay` rebuilds your
+projection from the log, and your tools are served next to orlog's own.
+Core's seven tool names and its own event types are reserved — a profile
+cannot replace `recall`. A workspace decides which installed profiles it
+loads, in `orlog.toml`:
+
+```toml
+[profiles]
+enabled = ["mimir"]   # strict allowlist; or use `disabled` to subtract
+```
+
+`tests/fixtures/orlog_refplugin/` is a working no-op profile exercising all
+three groups, and `tests/test_plugins.py` installs it as a real
+distribution rather than monkeypatching discovery.
+
+## Known deviations from ORLOG-SPEC.md v1.1
+
+- `pipeline.py` is 521 lines and `runtime.py` 654, both well over this
+  project's own ~200-line-per-file guideline. `pipeline.py` is the central
+  orchestrator wiring every layer together plus the optional stats hooks;
+  `runtime.py` is the write path plus the registry wiring. Splitting either
+  felt riskier than leaving it, but both are candidates for a cleanup pass.
 - `FastEmbedEmbedder` (the spec-default embedder, `BAAI/bge-small-en-v1.5`)
   is now exercised directly by `tests/test_retrieval_hybrid.py`'s
   `resolve_key()` regression tests (three cases, added alongside the
@@ -327,5 +372,15 @@ set.
   distributed primitive — enough to stop a second `orlog serve` on the
   same machine, not across machines.
 - `orlog conformance --target self` only supports `self` (shells out to this
-  install's own `tests/conformance/`); a remote `--target=<endpoint>` mode
-  isn't built, since spec's MCP transport is stdio-only in v1.0.
+  install's own `tests/conformance/`). A remote `--target=<endpoint>` mode
+  isn't built: `orlog serve --http` (spec §B12.5) now gives it something to
+  point at, but the conformance cells assume direct access to the log and
+  the index, not just the MCP surface.
+- `[schema] known_types` (entity types) and `[schema] known_event_types`
+  (event types) are two separate lists. The Mímir plan called for one
+  merged `known_types`; keeping them apart means declaring an entity type
+  `person` does not also authorize an event type named `person`, and it
+  leaves every existing `orlog.toml` reading the way it did.
+- `orlog serve --http` has no authentication, no TLS and no multi-tenancy.
+  It is a single-machine daemon so several MCP clients can share one
+  writer, not a remote server — `ORLOG-SPEC.md` §C4 still defers that.

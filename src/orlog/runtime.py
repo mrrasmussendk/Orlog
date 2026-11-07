@@ -74,17 +74,19 @@ from orlog.errors import (
     SchemaError,
     VerifierUnavailableError,
 )
+from orlog.event_types import EventTypeRegistry
 from orlog.heimdall import Heimdall, build_ground_truth
 from orlog.huginn import ScriptedDeriver
 from orlog.models.event import EventDraft
 from orlog.muninn import RouteCache
 from orlog.observability import Stats
 from orlog.pipeline import Pipeline
-from orlog.scrub import detect_pii_kinds, scrub
+from orlog.projections import ProjectionRegistry, ProjectionStore
+from orlog.queries import IndexQuery
+from orlog.scrub import detect_pii_kinds, scrub, scrub_payload
 from orlog.skuld import OutcomeLedger
 from orlog.storage import EventIndex, SegmentedLog
 from orlog.vault import Vault
-from orlog.verdandi import build_supersession_chains
 from orlog.workspace import Workspace
 
 
@@ -150,6 +152,20 @@ class Runtime:
                 "whose integrity cannot be established. Run `orlog replay` to see the full extent."
             )
         self.index = EventIndex(workspace.index_path)
+        # index.sqlite is a derived cache (§B2), so the only honest repair
+        # for one that does not match the log is to rebuild it -- which is
+        # also what migrates a workspace written before §B12.4's tables
+        # existed, with no migration command and no stale-read window.
+        if self.index.event_count() != self.log.event_count():
+            self.index.rebuild(self.log)
+        self.query = IndexQuery(self.index)
+        self.types = EventTypeRegistry.load(
+            enabled=config.profiles.enabled, disabled=config.profiles.disabled
+        )
+        self.projections = ProjectionRegistry.load(
+            enabled=config.profiles.enabled, disabled=config.profiles.disabled
+        )
+        self.projection_store = ProjectionStore(self.projections, index=self.index)
         self.vault = Vault(workspace.vault_path)
         self.cache = RouteCache(max_entries=config.cache.max_entries)
         self.ledger = OutcomeLedger(self.log, index=self.index)
@@ -212,8 +228,9 @@ class Runtime:
 
     def remember(
         self,
-        text: str,
+        text: str = "",
         *,
+        payload: dict | None = None,
         occurred_at: datetime | None = None,
         recorded_at: datetime | None = None,
         event_type: str = "fact",
@@ -227,6 +244,27 @@ class Runtime:
         register_new_type: bool = False,
         register_new_attribute: bool = False,
     ):
+        # A registered non-"fact" type (§B12.1) takes a typed payload
+        # instead of entity/attribute/value, and is validated against the
+        # profile's own pydantic model. "fact" keeps the e/a/v requirement
+        # below unchanged -- it is core's queryable shape, not one profile's
+        # among many.
+        if event_type != "fact":
+            self._check_event_type(event_type)
+        if event_type in self.types:
+            return self._remember_typed(
+                event_type,
+                payload,
+                text=text,
+                occurred_at=occurred_at,
+                recorded_at=recorded_at,
+                actor=actor,
+            )
+        if payload is not None:
+            raise SchemaError(
+                f"`payload` is only accepted for a registered event type; {event_type!r} is not "
+                f"one. Registered: {', '.join(sorted(self.types.names)) or '(none)'}."
+            )
         # entity/attribute/value are now REQUIRED together, not optional: a
         # bare-text write (any of the three missing) used to be silently
         # accepted and durably appended, but was permanently unretrievable
@@ -344,10 +382,75 @@ class Runtime:
             payload["entity_label"] = entity
             payload["entity_detail"] = entity_detail
         draft = EventDraft(occurred_at=occurred_at, actor=actor, type=event_type, payload=payload)
+        return self._append(draft, recorded_at=recorded_at)
+
+    def _append(self, draft: EventDraft, *, recorded_at: datetime | None = None):
+        """Append, index, and fold the new event into every live projection
+        view -- §B12.2's "update incrementally on append". One path, so a
+        typed profile event is indexed and projected exactly like a fact."""
         event = self.log.append(draft, recorded_at=recorded_at)
-        self.index.index_event(event, segment=self._current_segment_name(), offset=self.log.current_segment_offset())
+        self.index.index_appended(self.log, event)
+        self.projection_store.on_append(event, built_at=datetime.now(timezone.utc))
         self.stats.record_append()
         return event
+
+    def _check_event_type(self, event_type: str) -> None:
+        """A non-"fact" write must name a type this workspace knows (§B12.1):
+        core's own vocabulary, a loaded profile's registered type, or one
+        declared in [schema] known_event_types.
+
+        Before the registry existed, remember() accepted ANY type string and
+        then demanded entity/attribute/value for it, which meant a typo in
+        `type` produced a durable event nobody would ever look for under
+        that name. The check is the same "fail visible at write time"
+        discipline the rest of this method applies.
+        """
+        known = self.types.known_event_types(self.config.schema_.known_event_types)
+        if event_type not in known:
+            raise SchemaError(
+                f"{event_type!r} is not a known event type. Known: {', '.join(sorted(known))}. "
+                "Register it from a profile (entry-point group 'orlog.event_types') or declare "
+                "it in [schema] known_event_types."
+            )
+
+    def _remember_typed(
+        self,
+        event_type: str,
+        payload: dict | None,
+        *,
+        text: str,
+        occurred_at: datetime | None,
+        recorded_at: datetime | None,
+        actor: str,
+    ):
+        """Append an event of a registered profile type (§B12.1).
+
+        The payload is scrubbed BEFORE validation so the model certifies
+        exactly the bytes that land in the log, never a pre-scrub version
+        of them -- see event_types.py's own docstring on the ordering.
+        """
+        spec = self.types.spec(event_type)
+        if payload is None:
+            raise SchemaError(
+                f"event type {event_type!r} (registered by {spec.distribution!r}) is written "
+                "with a `payload`, validated against its own model -- not with "
+                "entity/attribute/value."
+            )
+        if text:
+            raise SchemaError(
+                f"event type {event_type!r} carries its content in `payload`; `text` is core's "
+                "fact shape and is not stored for a typed event. Put the prose in a field of "
+                f"{spec.model.__name__}."
+            )
+        scrubbed = scrub_payload(dict(payload), self.vault, detectors=self.config.privacy.detectors)
+        validated = self.types.validate_payload(event_type, scrubbed)
+        draft = EventDraft(
+            occurred_at=occurred_at or datetime.now(timezone.utc),
+            actor=actor,
+            type=event_type,
+            payload=validated,
+        )
+        return self._append(draft, recorded_at=recorded_at)
 
     def _reject_pii_in_key(self, field: str, value: str) -> None:
         """Refuse an entity/attribute that carries detectable PII.
@@ -416,37 +519,17 @@ class Runtime:
             )
 
     def _known_types_in_log(self) -> set[str]:
-        types: set[str] = set()
-        for event in self.log.read_all():
-            if event.type != "fact":
-                continue
-            ent = event.payload.get("entity")
-            if ent is None:
-                continue
-            entity_type, sep, _ = ent.partition(":")
-            if sep:
-                types.add(entity_type)
-        return types
+        return self.query.entity_types_in_log()
 
     def _known_attributes_for_type(self, entity_type: str) -> set[str]:
         """The log IS the attribute registry: any attribute already used by a
         fact whose entity's type prefix matches is "known" -- no separate
         persisted list to fall out of sync with what was actually written.
-        Mirrors server_tools.recall_history_tool's own raw-log-scan pattern;
-        consistent with this reference implementation's existing "re-derive
-        from the log every time" posture (module docstring point 1).
+        Read through the index (§B12.4) rather than by re-scanning every
+        event: this runs on the write path, so it used to make each
+        remember() cost a full log read.
         """
-        attributes: set[str] = set()
-        for event in self.log.read_all():
-            if event.type != "fact":
-                continue
-            ent = event.payload.get("entity")
-            attr = event.payload.get("attribute")
-            if ent is None or attr is None:
-                continue
-            if ent.split(":", 1)[0] == entity_type:
-                attributes.add(attr)
-        return attributes
+        return self.query.attributes_for_entity_type(entity_type)
 
     def _enforce_entity_detail(self, entity: str, entity_detail: str | None) -> None:
         """spec §B9: entity_detail is required once a bare label has already
@@ -471,16 +554,7 @@ class Runtime:
         raise SchemaError(f"{entity!r} exists with detail={first!r}{extra}. Supply a distinguishing entity_detail.")
 
     def _known_details_for_label(self, label: str) -> set[str]:
-        details: set[str] = set()
-        for event in self.log.read_all():
-            if event.type != "fact":
-                continue
-            if event.payload.get("entity_label") == label and event.payload.get("entity_detail"):
-                details.add(event.payload["entity_detail"])
-        return details
-
-    def _current_segment_name(self) -> str:
-        return self.log._current.path.name
+        return self.query.details_for_label(label)
 
     def _build_verifier(self, truth: dict, *, truth_version: str):
         """spec §B11's three backends: "windows", "pytest", "module:...".
@@ -539,16 +613,31 @@ class Runtime:
         horizon it was computed under.
         """
         now = now or datetime.now(timezone.utc)
-        events = self.log.read_all()
-        fact_events = [
-            e for e in events
-            if e.type == "fact" and e.payload.get("entity") is not None and e.payload.get("attribute") is not None
-            and (known_as_of is None or e.recorded_at <= known_as_of)
-        ]
+        # Read through the index (§B12.4), not log.read_all(): this runs on
+        # every recall(), and the filter it used to do in Python is a
+        # single indexed query here. `known_as_of` stays a filter rather
+        # than a prefix slice for the reason the docstring gives above.
+        fact_events = self.query.fact_events(known_as_of=known_as_of)
         if not fact_events:
             return None
 
-        view, pv = build_supersession_chains(fact_events, builder="orlog-runtime", built_at=now)
+        # Built through the projection registry (§B12.2), so core's own hot
+        # path goes through the same seam a profile's projections do -- and
+        # gets the cache and the incremental append path with it.
+        projected = self.projection_store.view(
+            "supersession_chains",
+            fact_events,
+            built_at=now,
+            known_as_of=known_as_of,
+            # The index query above IS supersession_chains' selects(), so
+            # the store can skip re-filtering and keep its cache check O(1)
+            # -- see ProjectionStore's own docstring on `preselected`.
+            preselected=True,
+        )
+        if projected is None:
+            return None
+        view, pv = projected.view, projected.version
+        fact_events = list(projected.events)
         truth = build_ground_truth(fact_events)
         truth_version = f"windows@{pv.built_from}"
         if known_as_of is not None:

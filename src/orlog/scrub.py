@@ -145,3 +145,28 @@ def detect_pii_kinds(text: str) -> set[str]:
             kinds.add(kind)
             break
     return kinds
+
+
+def scrub_payload(payload: dict, vault: Vault, *, detectors: list[str] | None = None) -> dict:
+    """scrub() every string anywhere inside a payload, recursively.
+
+    Core's own payloads are scrubbed field by field, because core knows
+    which of its fields are prose and which are lookup keys (runtime.py
+    deliberately leaves entity/attribute alone). A profile's payload
+    (event_types.py) has no such map -- the field names are the profile's,
+    not ours -- so the whole structure goes through, on the principle that
+    an un-erasable identifier in an append-only log is the worse failure.
+    A profile that needs a field left verbatim should store a hash or an
+    opaque id there, which no detector matches anyway.
+
+    Dict KEYS are left alone: they are field names from the profile's own
+    pydantic model, so rewriting one would produce a payload its own model
+    no longer validates.
+    """
+    if isinstance(payload, dict):
+        return {k: scrub_payload(v, vault, detectors=detectors) for k, v in payload.items()}
+    if isinstance(payload, list):
+        return [scrub_payload(v, vault, detectors=detectors) for v in payload]
+    if isinstance(payload, str):
+        return scrub(payload, vault, detectors=detectors)
+    return payload

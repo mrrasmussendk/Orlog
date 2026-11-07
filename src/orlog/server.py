@@ -8,6 +8,13 @@ MUST honored (spec §B9): tool errors map to abstentions or the error
 taxonomy -- an MCP tool call never returns an unverified claim as if
 verified (server_tools.recall_tool always returns a real Answer object,
 whose `verified` field is the caller's only source of truth for that).
+
+§B12.3: core's seven tools are wired here by hand, because their names,
+arguments and descriptions are normative. A profile's tools are registered
+after them, from the `orlog.tools` entry-point group and from
+`extra_tools`, through tools.bind(). Core's names are reserved -- a profile
+cannot replace `recall`, which is the one call carrying the verify-or-
+abstain guarantee.
 """
 
 from __future__ import annotations
@@ -18,6 +25,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from orlog.runtime import Runtime
+from orlog.tools import ToolRegistry, as_specs, bind
 from orlog.server_tools import (
     check_action_tool,
     list_attributes_tool,
@@ -47,8 +55,30 @@ def _spec_text() -> str | None:
     return None
 
 
-def build_server(runtime: Runtime) -> FastMCP:
-    mcp = FastMCP("orlog")
+DEFAULT_HTTP_PORT = 8787
+
+
+def build_server(
+    runtime: Runtime,
+    extra_tools=None,
+    *,
+    host: str | None = None,
+    port: int | None = None,
+) -> FastMCP:
+    """The MCP server for `runtime`.
+
+    `extra_tools` is a {name: callable} mapping (or an iterable of
+    tools.ToolSpec) added alongside whatever the `orlog.tools` entry-point
+    group supplies -- the seam an embedding application uses when it has
+    tools to expose but no distribution to install. `host`/`port` are only
+    read by the streamable-HTTP transport (§B12.5); stdio ignores them.
+    """
+    settings = {}
+    if host is not None:
+        settings["host"] = host
+    if port is not None:
+        settings["port"] = port
+    mcp = FastMCP("orlog", **settings)
     mode = runtime.config.workspace.mode  # "conformant" | "degraded" -- spec §B9 MUST state this
 
     @mcp.tool()
@@ -230,6 +260,12 @@ def build_server(runtime: Runtime) -> FastMCP:
     def stats() -> dict:
         """Counters: appends, recalls, cache hits/evicts, verifications, abstentions, tokens, latency."""
         return stats_tool(runtime)
+
+    registry = ToolRegistry.load(
+        enabled=runtime.config.profiles.enabled, disabled=runtime.config.profiles.disabled
+    ).extend(as_specs(extra_tools))
+    for spec in registry:
+        mcp.add_tool(bind(spec, runtime), name=spec.name, description=spec.description)
 
     @mcp.resource("orlog://spec")
     def spec_resource() -> str:
