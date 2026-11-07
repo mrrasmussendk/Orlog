@@ -1,7 +1,9 @@
 """Smoke test for a PyInstaller-built orlog binary: proves it actually
 starts and its heaviest dependencies (cryptography, pytest, mcp,
 fastembed/onnxruntime, anthropic, openai) import and run -- not just that
-the build succeeded.
+the build succeeded. `orlog doctor` is checked too: it is what a user runs
+when the binary misbehaves, and it reports on the bundled dependencies, so
+it has to be right about them.
 
 The anthropic/openai check works because orlog.runtime.Runtime.__init__
 builds the configured Deriver EAGERLY (via _build_deriver()), at `orlog
@@ -118,6 +120,30 @@ def main() -> int:
             print(f"FAIL: could not find ORLOG_VAULT_KEY in init output\n{init.stdout}")
             return 1
         print("OK: init")
+
+        # doctor is the command a user runs when the binary doesn't work, so
+        # it has to work in the binary. It also double-checks that the
+        # bundled dependencies are VISIBLE to the frozen app's import
+        # machinery: doctor reports on fastembed via importlib.util.
+        # find_spec, so if PyInstaller's importer can't resolve it here,
+        # every binary user gets told fastembed is missing from an orlog
+        # that bundles it.
+        doctor = subprocess.run(
+            [binary, "doctor", str(workspace)],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "ORLOG_VAULT_KEY": vault_key},
+        )
+        if "workspace" not in doctor.stdout:
+            print(f"FAIL: doctor printed no workspace line\nstdout:\n{doctor.stdout}\nstderr:\n{doctor.stderr}")
+            return 1
+        if "needs the `fastembed` package" in doctor.stdout:
+            print(
+                "FAIL: doctor cannot see the bundled fastembed -- the frozen app's importer did not "
+                f"resolve it, so every binary user is told to install it\nstdout:\n{doctor.stdout}"
+            )
+            return 1
+        print("OK: doctor")
 
         conformance = subprocess.run([binary, "conformance"], capture_output=True, text=True, cwd=tmp)
         if conformance.returncode != 0:

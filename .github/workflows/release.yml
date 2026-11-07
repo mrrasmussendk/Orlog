@@ -33,6 +33,17 @@ jobs:
     needs: check-version
     strategy:
       fail-fast: false
+      # One row per binary a user can download. PyInstaller cannot
+      # cross-compile, so each platform/arch needs its own runner -- which
+      # is why the two rows below exist: without them the Homebrew formula
+      # `odie`s on Intel macOS and arm64 Linux and sends those users to
+      # PyPI, and anyone on an ARM server or in a Docker container on an
+      # Apple Silicon Mac has no binary at all.
+      #
+      # Windows arm64 is deliberately absent: `windows-11-arm` runners
+      # exist, but setup-python's arm64 coverage is newer than this
+      # project's 3.11 floor, and a row that fails blocks the `release`
+      # job (which needs ALL of `build`) from publishing anything.
       matrix:
         include:
           - os: windows-latest
@@ -43,9 +54,17 @@ jobs:
             asset_os: macos
             asset_arch: arm64  # macos-latest runners are Apple Silicon
             bin_name: orlog
+          - os: macos-13
+            asset_os: macos
+            asset_arch: x86_64  # the last Intel macOS runner image
+            bin_name: orlog
           - os: ubuntu-latest
             asset_os: linux
             asset_arch: x86_64
+            bin_name: orlog
+          - os: ubuntu-24.04-arm
+            asset_os: linux
+            asset_arch: arm64
             bin_name: orlog
     runs-on: ${{ matrix.os }}
     steps:
@@ -86,7 +105,10 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: orlog-${{ matrix.asset_os }}
+          # Must include the arch: two rows now share an asset_os, and
+          # upload-artifact@v4 fails on a duplicate artifact name rather
+          # than merging into it the way v3 did.
+          name: orlog-${{ matrix.asset_os }}-${{ matrix.asset_arch }}
           path: out/*.zip
 
   release:
