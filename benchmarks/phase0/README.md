@@ -74,6 +74,38 @@ verify-or-abstain pipeline.
 Free-text accuracy against Mem0 is a different question and lives in
 [`vs_mem0`](../vs_mem0/README.md); it needs API keys and makes billed calls.
 
+## Does consulting it change the decision?
+
+`handoff.py` runs the narrow, deterministic core of "is this memory
+useful": a second agent picks up work after the first one's context is
+gone and acts on twelve facts about a project.
+
+| arm | correct | stale | abstained |
+|---|--:|--:|--:|
+| A — a `/compact`-style summary | 6 | **4** | 2 |
+| B — asks `recall()` | **10** | **0** | 2 |
+
+Arm A is not a hand-built straw man: it is `recall(key,
+known_as_of=<the instant the summary was written>)` — what the record
+knew then, from the same call site as arm B with one argument changed. A
+control the treatment can quietly beat is not worth asserting on.
+
+The fixture plants cases orlog loses. Six of the twelve facts never
+change, so consulting it only confirms what the summary already had. Two
+were never recorded, and orlog does not rescue them — it abstains, which
+is a better failure than a confident wrong answer but is still a failure
+to answer. Both arms end up equally stuck on those two.
+
+**What this does not establish:** that an agent handed current facts does
+better *work*. There is no model here and no judgment. That is the Mímir
+plan's Phase 6 eval — fixture repo, three live arms, planted rules, task
+success — and nothing here substitutes for it.
+
+`tests/test_handoff_usefulness.py` asserts these properties in both
+directions, so the file fails if arm A ever stops going stale or if orlog
+ever starts answering something nobody wrote down. Reversing
+`build_supersession_chains`' sort order fails 4 of its 10 tests.
+
 ## Results
 
 Python 3.12, Linux, 50 entities × 8 attributes, 30 runs per query, p50.
