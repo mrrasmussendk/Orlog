@@ -345,7 +345,7 @@ distribution rather than monkeypatching discovery.
 
 ## Known deviations from ORLOG-SPEC.md v1.1
 
-- `pipeline.py` is 521 lines and `runtime.py` 654, both well over this
+- `pipeline.py` is 521 lines and `runtime.py` 661, both well over this
   project's own ~200-line-per-file guideline. `pipeline.py` is the central
   orchestrator wiring every layer together plus the optional stats hooks;
   `runtime.py` is the write path plus the registry wiring. Splitting either
