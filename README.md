@@ -43,14 +43,19 @@ only stores structured facts, not free-form text blobs.
 Pick whichever line fits how you work:
 
 ```bash
-uvx orlog init myproject --client=claude-code   # nothing installed: runs the latest release
-pipx install orlog                              # a persistent, isolated install
-python -m pip install orlog                     # or into the env you already have
-brew install mrrasmussendk/tap/orlog            # a prebuilt binary, no Python at all
+pipx install orlog                     # a persistent, isolated install
+python -m pip install orlog            # or into the env you already have
+brew install mrrasmussendk/tap/orlog   # a prebuilt binary, no Python at all
 ```
 
-Python 3.11+ for the first three; the Homebrew binary and the
+Python 3.11+ for the first two; the Homebrew binary and the
 [release zips](#standalone-binary-no-python-required) need nothing.
+
+Just want a look first? `uvx orlog --help` runs it without installing
+anything. Don't register an MCP server from `uvx`, though — the command it
+would record lives in uv's version-keyed tool cache, so the entry breaks on
+`uv cache clean` or the next release. `orlog init --client=` warns you if
+the path it is about to register looks like that.
 
 The `anthropic` / `openai` extras (`pipx install 'orlog[anthropic]'`) are
 only needed for the real LLM extractor — orlog runs everything
@@ -405,13 +410,16 @@ real `orlog serve --http` daemon in its own process.
 
 ## Known deviations from ORLOG-SPEC.md v1.1
 
-- `pipeline.py` is 521 lines, `runtime.py` 661 and `cli.py` 515, all well
-  over this project's own ~200-line-per-file guideline. `pipeline.py` is the
-  central orchestrator wiring every layer together plus the optional stats
-  hooks; `runtime.py` is the write path plus the registry wiring; `cli.py`
-  is one function per subcommand, with the install surface already split out
-  into `mcp_clients.py` and `doctor.py`. Splitting them further felt riskier
-  than leaving them, but all three are candidates for a cleanup pass.
+- `runtime.py` is 661 lines, `pipeline.py` 521, `cli.py` 571,
+  `mcp_clients.py` 519 and `doctor.py` 343 — all over this project's own
+  ~200-line-per-file guideline. `pipeline.py` is the central orchestrator
+  wiring every layer together plus the optional stats hooks; `runtime.py`
+  is the write path plus the registry wiring; `cli.py` is one function per
+  subcommand; `mcp_clients.py` is one config-writing strategy per MCP
+  client; `doctor.py` is one function per check. The last three are mostly
+  the comments explaining *why* each install failure mode is handled the
+  way it is, which is the part worth keeping. All five are candidates for a
+  cleanup pass.
 - `FastEmbedEmbedder` (the spec-default embedder, `BAAI/bge-small-en-v1.5`)
   is now exercised directly by `tests/test_retrieval_hybrid.py`'s
   `resolve_key()` regression tests (three cases, added alongside the

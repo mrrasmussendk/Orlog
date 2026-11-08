@@ -287,6 +287,93 @@ def test_a_registered_server_passes_and_reports_its_workspace(tmp_path, monkeypa
     assert str(root.resolve()) in check.detail
 
 
+def test_a_bare_command_is_resolved_against_path_not_the_cwd(fake_home, monkeypatch):
+    # What a hand-written config usually holds. The OS resolves it against
+    # PATH when it spawns the server, so checking the filesystem relative
+    # to the cwd reported a working entry as broken.
+    path = config_path_for(CLIENTS["cursor"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {"mcpServers": {"orlog": {"command": "orlog", "args": ["serve", "/ws"], "env": {VAULT_KEY_ENV: "k"}}}}
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("orlog.doctor.shutil.which", lambda name: "/usr/local/bin/orlog")
+
+    assert _by_name(check_mcp_clients(), "mcp: cursor").status == OK
+
+
+def test_a_bare_command_that_is_not_on_path_still_fails(fake_home, monkeypatch):
+    path = config_path_for(CLIENTS["cursor"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {"mcpServers": {"orlog": {"command": "orlog", "args": ["serve", "/ws"], "env": {VAULT_KEY_ENV: "k"}}}}
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("orlog.doctor.shutil.which", lambda name: None)
+
+    assert _by_name(check_mcp_clients(), "mcp: cursor").status == FAIL
+
+
+def test_a_project_scoped_registration_is_found(fake_home):
+    # `claude mcp add` without a global scope writes here, not to the
+    # top-level map -- reporting it as absent is the opposite of helpful.
+    path = config_path_for(CLIENTS["claude-code"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "projects": {
+                    "/home/me/myproject": {
+                        "mcpServers": {
+                            "orlog": {
+                                "command": sys.executable,
+                                "args": ["serve", "/home/me/myproject"],
+                                "env": {VAULT_KEY_ENV: "k"},
+                            }
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    check = _by_name(check_mcp_clients(), "mcp: claude-code")
+
+    assert check.status == OK
+    assert "project /home/me/myproject" in check.detail
+
+
+def test_an_ephemeral_command_warns_that_it_will_stop_working(fake_home, tmp_path):
+    cache = fake_home / ".cache" / "uv" / "archive-v0" / "abc" / "bin"
+    cache.mkdir(parents=True)
+    (cache / "orlog").write_text("#!/bin/sh\n", encoding="utf-8")
+    path = config_path_for(CLIENTS["cursor"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "orlog": {
+                        "command": str(cache / "orlog"),
+                        "args": ["serve", "/ws"],
+                        "env": {VAULT_KEY_ENV: "k"},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    check = _by_name(check_mcp_clients(), "mcp: cursor")
+
+    assert check.status == WARN
+    assert "works now" in check.detail and "uv cache clean" in check.detail
+
+
 def test_a_server_pointing_at_a_vanished_executable_fails(fake_home, tmp_path):
     path = config_path_for(CLIENTS["cursor"])
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -50,20 +50,32 @@ declares.
 5. **Verify the install paths a user actually takes**, on a machine with no
    checkout:
    ```bash
-   uvx orlog --help
+   uvx orlog --help                                       # the package is reachable
    pipx install orlog && orlog doctor
    brew install mrrasmussendk/tap/orlog && orlog doctor
    ```
+   Then register a client from the pipx or brew install (not from `uvx`,
+   whose cached path does not survive) and confirm `orlog doctor` reports
+   the entry as `ok`.
 
 ## Platform coverage
 
 `release.yml` builds macOS arm64 + x86_64, Linux x86_64 + arm64, and Windows
 x86_64. PyInstaller cannot cross-compile, so each one is its own runner.
 
-Windows arm64 is deliberately absent: `windows-11-arm` runners exist, but
-`setup-python`'s arm64 coverage is newer than this project's 3.11 floor, and
-a failing row blocks the `release` job (which needs *all* of `build`) from
-publishing anything at all. Those users install from PyPI.
+**Runner images retire, and a retired one takes the whole release with it.**
+`release` needs *all* of `build`, so a single row that cannot be scheduled
+means no binaries and no GitHub Release — the failure is in job setup, not
+in a build step, so it is easy to misread. The Intel macOS row was briefly
+written against `macos-13`, which GitHub retired on 2025-12-04; it is now
+`macos-15-intel`, and x86_64 macOS runners go away altogether after the
+macOS 15 image retires in fall 2027. When that happens, drop the row rather
+than pin a dead image — `bump.py` will emit an `odie` for the platform
+automatically.
+
+Windows arm64 is deliberately absent for the same reason: `windows-11-arm`
+runners exist, but `setup-python`'s arm64 coverage is newer than this
+project's 3.11 floor. Those users install from PyPI.
 
 macOS binaries are ad-hoc signed, not notarized. Homebrew fetches over curl,
 which doesn't set `com.apple.quarantine`, so `brew install` runs clean; a

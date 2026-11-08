@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,6 +52,9 @@ from orlog.mcp_clients import (
     DEFAULT_SERVER_NAME,
     ClientConfigError,
     config_path_for,
+    ephemeral_command_reason,
+    find_registered_vault_key,
+    orlog_command,
     register,
 )
 from orlog.models.event import EventDraft
@@ -138,16 +142,11 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     if not freshly_created:
         # A pre-existing workspace already has a vault encrypted under some
-        # other key -- generating a new one here and writing it into a live
-        # client config would silently point that client at a key that
-        # can't open this vault.
+        # other key, so no new key is generated here -- but the clients
+        # still need registering (or re-pointing at a moved orlog), which
+        # _reregister does with the key already on record.
         if clients:
-            print(
-                "This workspace already existed, so no new vault key was generated. "
-                "orlog init doesn't know the original key, and writing a fresh one "
-                "into an MCP client's config would break the existing vault -- set "
-                f"{VAULT_KEY_ENV} yourself in that server entry's env block."
-            )
+            return _reregister(ws, clients, _server_name(args))
         return 0
 
     vault_key = generate_key()
@@ -156,7 +155,16 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"  {VAULT_KEY_ENV}={vault_key}")
         return 0
 
-    server_name = args.server_name or args.claude_code_name or DEFAULT_SERVER_NAME
+    return _register_clients(ws, clients, vault_key, _server_name(args), key_is_new=True)
+
+
+def _server_name(args: argparse.Namespace) -> str:
+    return args.server_name or args.claude_code_name or DEFAULT_SERVER_NAME
+
+
+def _register_clients(
+    ws: Workspace, clients: list[str], vault_key: str, server_name: str, *, key_is_new: bool
+) -> int:
     failed = []
     for client_key in clients:
         client = CLIENTS[client_key]
@@ -164,7 +172,12 @@ def cmd_init(args: argparse.Namespace) -> int:
             config_path = register(
                 client_key, ws, vault_key, server_name=server_name, config_path=_client_config_path(client_key)
             )
-        except ClientConfigError as exc:
+        # OSError too: a read-only directory, a full disk or a permission
+        # problem on the client's config is an ordinary thing to hit, and
+        # letting it escape as a traceback skipped every remaining client
+        # AND threw away a freshly generated vault key with no way to
+        # recover it.
+        except (ClientConfigError, OSError) as exc:
             print(f"registering with {client.label} failed: {exc}", file=sys.stderr)
             failed.append(client_key)
             continue
@@ -172,18 +185,61 @@ def cmd_init(args: argparse.Namespace) -> int:
         if client.note:
             print(f"  {client.label}: {client.note}.")
 
+    reason = ephemeral_command_reason(orlog_command())
+    if reason:
+        # Registering a path that is about to disappear is worse than not
+        # registering: it works now and stops working later, invisibly.
+        print(
+            f"\nwarning: the registered command is {orlog_command()}, and {reason}.",
+            file=sys.stderr,
+        )
+
     if failed:
         # The workspace and its key exist either way, so print the key --
         # without it, a partially-registered workspace is unopenable and the
         # user has no way to finish the job by hand.
-        print(
-            f"Workspace and vault key were created, but {len(failed)} client(s) were not registered. "
-            f"Add this to the server entry's env block yourself:",
-            file=sys.stderr,
-        )
-        print(f"  {VAULT_KEY_ENV}={vault_key}", file=sys.stderr)
+        if key_is_new:
+            print(
+                f"Workspace and vault key were created, but {len(failed)} client(s) were not registered. "
+                f"Add this to the server entry's env block yourself:",
+                file=sys.stderr,
+            )
+            print(f"  {VAULT_KEY_ENV}={vault_key}", file=sys.stderr)
+        else:
+            print(f"{len(failed)} client(s) were not registered; the workspace was left alone.", file=sys.stderr)
         return 2
     return 0
+
+
+def _reregister(ws: Workspace, clients: list[str], server_name: str) -> int:
+    """Re-point an existing workspace's client entries at this orlog.
+
+    `init` cannot mint a key for a workspace that already has a vault -- a
+    fresh one cannot open it -- so a repair has to recover the real key.
+    A stale registration still carries it (the command path is what went
+    bad, not the key), so that is the first place to look; an exported
+    ORLOG_VAULT_KEY is the fallback. Without either, orlog says so rather
+    than writing a key it would be guessing at.
+
+    This exists because `orlog doctor` tells you to run exactly this
+    command when a client entry points at an orlog that has moved, and
+    before this it silently did nothing at all.
+    """
+    found = find_registered_vault_key(ws, path_for=_client_config_path)
+    if found:
+        vault_key, source = found
+    elif os.environ.get(VAULT_KEY_ENV):
+        vault_key, source = os.environ[VAULT_KEY_ENV], f"${VAULT_KEY_ENV}"
+    else:
+        print(
+            "This workspace already existed, so orlog init did not generate a vault key -- a new one "
+            "could not open the existing vault. No client config records a key for it either, so there "
+            f"is nothing to re-register with: export the original {VAULT_KEY_ENV} and run this again, "
+            "or set it yourself in that server entry's env block."
+        )
+        return 0
+    print(f"Re-registering an existing workspace, using the vault key already on record in {source}.")
+    return _register_clients(ws, clients, vault_key, server_name, key_is_new=False)
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:

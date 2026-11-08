@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import tempfile
 import tomllib
+from pathlib import Path
 
 import pytest
 
@@ -21,11 +23,12 @@ from orlog.mcp_clients import (
     CLIENTS,
     ClientConfigError,
     config_path_for,
+    ephemeral_command_reason,
     orlog_command,
     register,
     registered_servers,
 )
-from orlog.vault import VAULT_KEY_ENV, generate_key
+from orlog.vault import VAULT_KEY_ENV
 from orlog.workspace import Workspace
 
 
@@ -339,15 +342,151 @@ def test_init_prints_the_vault_key_when_a_client_registration_fails(tmp_path, ca
     assert f"{VAULT_KEY_ENV}=" in captured.err
 
 
-def test_init_on_an_existing_workspace_refuses_to_write_a_fresh_key(tmp_path, capsys):
+def test_init_on_an_existing_workspace_reuses_the_key_already_on_record(tmp_path, monkeypatch, capsys):
+    # A second client, registered later. The workspace's vault is encrypted
+    # under the key the FIRST registration recorded, so a fresh one could
+    # not open it -- the repair has to recover the real one.
+    monkeypatch.delenv(VAULT_KEY_ENV, raising=False)
     root = tmp_path / "myproject"
-    cmd_init(build_parser().parse_args(["init", str(root)]))
-    before = generate_key()  # just to prove the next call invents nothing
+    cmd_init(build_parser().parse_args(["init", str(root), "--client=cursor"]))
+    original = registered_servers("cursor")["orlog"]["env"][VAULT_KEY_ENV]
+
+    rc = cmd_init(build_parser().parse_args(["init", str(root), "--client=vscode"]))
+
+    assert rc == 0
+    assert registered_servers("vscode")["orlog"]["env"][VAULT_KEY_ENV] == original
+    assert "already on record" in capsys.readouterr().out
+
+
+def test_init_repairs_a_client_entry_whose_orlog_has_moved(tmp_path, monkeypatch, capsys):
+    # This is the command `orlog doctor` prints when it finds a stale entry.
+    # It used to do nothing at all.
+    monkeypatch.delenv(VAULT_KEY_ENV, raising=False)
+    root = tmp_path / "myproject"
+    cmd_init(build_parser().parse_args(["init", str(root), "--client=cursor"]))
+    path = config_path_for(CLIENTS["cursor"])
+    data = json.loads(path.read_text(encoding="utf-8"))
+    key = data["mcpServers"]["orlog"]["env"][VAULT_KEY_ENV]
+    data["mcpServers"]["orlog"]["command"] = str(tmp_path / "gone" / "orlog")
+    path.write_text(json.dumps(data), encoding="utf-8")
 
     rc = cmd_init(build_parser().parse_args(["init", str(root), "--client=cursor"]))
 
     assert rc == 0
-    assert registered_servers("cursor") == {}
-    out = capsys.readouterr().out
-    assert "no new vault key was generated" in out
-    assert before not in out
+    repaired = registered_servers("cursor")["orlog"]
+    assert repaired["command"] == orlog_command(), "the stale command must be re-pointed"
+    assert repaired["env"][VAULT_KEY_ENV] == key, "and the original key must survive the repair"
+
+
+def test_init_on_an_existing_workspace_with_no_recoverable_key_says_so(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv(VAULT_KEY_ENV, raising=False)
+    root = tmp_path / "myproject"
+    cmd_init(build_parser().parse_args(["init", str(root)]))  # no client: key only ever printed
+
+    rc = cmd_init(build_parser().parse_args(["init", str(root), "--client=cursor"]))
+
+    assert rc == 0
+    assert registered_servers("cursor") == {}, "better to write nothing than a key that cannot open the vault"
+    assert "nothing to re-register with" in capsys.readouterr().out
+
+
+def test_init_on_an_existing_workspace_falls_back_to_the_exported_key(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "myproject"
+    cmd_init(build_parser().parse_args(["init", str(root)]))
+    monkeypatch.setenv(VAULT_KEY_ENV, "the-exported-key")
+
+    rc = cmd_init(build_parser().parse_args(["init", str(root), "--client=cursor"]))
+
+    assert rc == 0
+    assert registered_servers("cursor")["orlog"]["env"][VAULT_KEY_ENV] == "the-exported-key"
+    assert f"${VAULT_KEY_ENV}" in capsys.readouterr().out, "say where the key came from"
+
+
+def test_registering_another_workspace_under_the_same_name_is_refused(ws, tmp_path):
+    # That env block is the only copy of the first workspace's vault key,
+    # so replacing it would make its encrypted registry unrecoverable.
+    register("cursor", ws, "the-first-key")
+    other = Workspace(tmp_path / "second")
+    other.scaffold()
+
+    with pytest.raises(ClientConfigError, match="different workspace"):
+        register("cursor", other, "a-second-key")
+
+    assert registered_servers("cursor")["orlog"]["env"][VAULT_KEY_ENV] == "the-first-key"
+
+
+def test_re_registering_the_same_workspace_is_allowed(ws):
+    register("cursor", ws, "k")
+
+    register("cursor", ws, "k", command="/new/path/orlog")
+
+    assert registered_servers("cursor")["orlog"]["command"] == "/new/path/orlog"
+
+
+def test_codex_distinguishes_a_repair_from_someone_elses_workspace(ws, tmp_path):
+    register("codex", ws, "k")
+    other = Workspace(tmp_path / "second")
+    other.scaffold()
+
+    with pytest.raises(ClientConfigError, match="for this workspace"):
+        register("codex", ws, "k")
+    with pytest.raises(ClientConfigError, match="different workspace"):
+        register("codex", other, "k2")
+
+
+def test_the_registered_command_keeps_the_symlink_homebrew_upgrades(tmp_path, monkeypatch):
+    # /opt/homebrew/bin/orlog -> ../Cellar/orlog/<version>/bin/orlog.
+    # Resolving that records the version, and `brew upgrade` deletes it.
+    cellar = tmp_path / "Cellar" / "orlog" / "0.0.4" / "bin"
+    cellar.mkdir(parents=True)
+    (cellar / "orlog").write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher = tmp_path / "bin"
+    launcher.mkdir()
+    (launcher / "orlog").symlink_to(cellar / "orlog")
+    monkeypatch.setattr("orlog.mcp_clients.sys.argv", [str(launcher / "orlog"), "init"])
+
+    assert orlog_command() == str(launcher / "orlog")
+    assert "Cellar" not in orlog_command()
+
+
+def test_a_uv_tool_cache_command_is_reported_as_not_durable(tmp_path):
+    reason = ephemeral_command_reason(str(tmp_path / ".cache" / "uv" / "archive-v0" / "abc" / "bin" / "orlog"))
+
+    assert reason and "uv cache clean" in reason
+
+
+def test_a_command_under_the_temp_directory_is_reported_as_not_durable():
+    reason = ephemeral_command_reason(str(Path(tempfile.gettempdir()) / "build" / "orlog"))
+
+    assert reason and "temporary directory" in reason
+
+
+def test_an_installed_command_is_not_reported_as_ephemeral():
+    assert ephemeral_command_reason("/usr/local/bin/orlog") is None
+    assert ephemeral_command_reason("") is None
+
+
+def test_init_warns_when_it_registers_a_command_that_will_not_last(tmp_path, monkeypatch, capsys):
+    cache = tmp_path / ".cache" / "uv" / "archive-v0" / "deadbeef" / "bin"
+    cache.mkdir(parents=True)
+    (cache / "orlog").write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("orlog.mcp_clients.sys.argv", [str(cache / "orlog"), "init"])
+
+    cmd_init(build_parser().parse_args(["init", str(tmp_path / "proj"), "--client=cursor"]))
+
+    assert "uv cache clean" in capsys.readouterr().err
+
+
+def test_init_reports_an_unwritable_config_instead_of_crashing(tmp_path, monkeypatch, capsys):
+    def boom(*a, **k):
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr("orlog.cli.register", boom)
+
+    rc = cmd_init(build_parser().parse_args(["init", str(tmp_path / "proj"), "--client=cursor"]))
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "Permission denied" in err
+    # The workspace exists now, so losing the key would strand it.
+    assert f"{VAULT_KEY_ENV}=" in err

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -216,10 +217,31 @@ def _is_orlog_server(name: str, entry: dict) -> bool:
     return bool(command) and Path(command).name.lower().startswith("orlog")
 
 
+def _command_runnable(command: str) -> bool:
+    """Would a client spawning this `command` find something to run?
+
+    A bare name like "orlog" (what a hand-written config usually has) is
+    resolved by the OS against PATH, not against the current directory --
+    so checking Path(command).exists() on one reports a perfectly good
+    entry as broken, and makes doctor exit 1 on a healthy install.
+    """
+    if not command:
+        return False
+    if os.sep in command or (os.altsep and os.altsep in command):
+        return Path(command).exists()
+    return shutil.which(command) is not None
+
+
 def check_mcp_clients() -> list[Check]:
     """One check per MCP client that has a config file, reporting whether an
     orlog server is registered there and whether its command still exists."""
-    from orlog.mcp_clients import CLIENTS, ClientConfigError, config_path_for, registered_servers
+    from orlog.mcp_clients import (
+        CLIENTS,
+        ClientConfigError,
+        config_path_for,
+        ephemeral_command_reason,
+        iter_registered_servers,
+    )
 
     checks: list[Check] = []
     for key in sorted(CLIENTS):
@@ -231,13 +253,11 @@ def check_mcp_clients() -> list[Check]:
         if not path.exists():
             continue
         try:
-            servers = registered_servers(key, config_path=path)
+            servers = iter_registered_servers(key, config_path=path)
         except ClientConfigError as exc:
             checks.append(Check(f"mcp: {key}", FAIL, str(exc)))
             continue
-        orlog_servers = {
-            name: entry for name, entry in servers.items() if isinstance(entry, dict) and _is_orlog_server(name, entry)
-        }
+        orlog_servers = [s for s in servers if _is_orlog_server(s.name, s.entry)]
         if not orlog_servers:
             checks.append(
                 Check(
@@ -248,13 +268,16 @@ def check_mcp_clients() -> list[Check]:
                 )
             )
             continue
-        for name, entry in sorted(orlog_servers.items()):
+        for server in sorted(orlog_servers, key=lambda s: (s.scope, s.name)):
+            entry = server.entry
             command = str(entry.get("command", ""))
             args = entry.get("args") or []
             workspace = next((a for a in args if a not in ("serve",)), "?")
             env = entry.get("env") if isinstance(entry.get("env"), dict) else {}
-            details = f"{client.label}: {name!r} -> {command} (workspace {workspace})"
-            if command and not Path(command).exists():
+            scope = "" if server.scope == "global" else f" [{server.scope}]"
+            details = f"{client.label}{scope}: {server.name!r} -> {command} (workspace {workspace})"
+            ephemeral = ephemeral_command_reason(command)
+            if not _command_runnable(command):
                 checks.append(
                     Check(
                         f"mcp: {key}",
@@ -269,6 +292,14 @@ def check_mcp_clients() -> list[Check]:
                         f"mcp: {key}",
                         FAIL,
                         f"{details} -- its env has no {VAULT_KEY_ENV}, so the server cannot open the vault",
+                    )
+                )
+            elif ephemeral:
+                checks.append(
+                    Check(
+                        f"mcp: {key}",
+                        WARN,
+                        f"{details} -- it works now, but {ephemeral}",
                     )
                 )
             else:

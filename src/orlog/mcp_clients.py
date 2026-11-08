@@ -40,6 +40,8 @@ import json
 import os
 import shutil
 import sys
+import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,10 +52,24 @@ DEFAULT_SERVER_NAME = "orlog"
 
 
 class ClientConfigError(Exception):
-    """A client's config file exists but orlog will not touch it -- it is
-    unparseable, or it already has an entry under this server name that a
-    rewrite would silently change. The message names what the user should
-    do instead."""
+    """A client's config file exists but orlog will not write what was
+    asked -- it is unparseable, or the write would destroy something: an
+    entry under this server name belonging to a DIFFERENT workspace, whose
+    env block holds the only copy of that workspace's vault key. (Both
+    writers refuse that. The TOML writer additionally refuses to replace
+    this workspace's own entry, because it appends rather than rewrites;
+    the message says which field to change by hand.) Every message names
+    what to do instead."""
+
+
+@dataclass(frozen=True)
+class RegisteredServer:
+    """One server entry found in a client's config, and which scope it was
+    found in ("global", or "project <path>")."""
+
+    scope: str
+    name: str
+    entry: dict
 
 
 @dataclass(frozen=True)
@@ -75,6 +91,9 @@ class McpClient:
     windows: str | None = None
     # Only set for clients whose Windows path is under %APPDATA%.
     windows_appdata: str | None = None
+    # Whether this client ALSO keeps per-directory server maps that orlog
+    # should look in when reporting (Claude Code's projects.<path>.mcpServers).
+    project_scoped: bool = False
     note: str = ""
 
 
@@ -85,6 +104,7 @@ CLIENTS: dict[str, McpClient] = {
         macos=".claude.json",
         linux=".claude.json",
         windows=".claude.json",
+        project_scoped=True,
         note="restart Claude Code to pick up the new server",
     ),
     "claude-desktop": McpClient(
@@ -154,21 +174,61 @@ def orlog_command() -> str:
     So: the running argv[0] if it is an orlog, then the console script
     installed beside this interpreter (what pip/pipx/venv creates), and
     only then PATH.
+
+    Symlinks are made absolute but NOT resolved. Homebrew's
+    /opt/homebrew/bin/orlog is a symlink into
+    /opt/homebrew/Cellar/orlog/<version>/bin/orlog, and resolving it
+    records a path with the version number in it -- which `brew upgrade`
+    deletes, breaking the registered server for the one install path the
+    formula exists to serve. pipx's ~/.local/bin/orlog is the same shape.
+    The symlink is the stable name; follow it at spawn time, not now.
     """
-    argv0 = Path(sys.argv[0])
+    argv0 = Path(os.path.abspath(sys.argv[0]))
     if argv0.name.startswith("orlog") and argv0.exists():
         # A console script or the frozen binary, invoked directly.
-        return str(argv0.resolve())
+        return str(argv0)
 
     # `python -m orlog.cli`: argv[0] is cli.py, but the console script for
     # THIS interpreter sits next to it.
     script = "orlog.exe" if sys.platform.startswith("win") else "orlog"
-    sibling = Path(sys.executable).parent / script
+    sibling = Path(os.path.abspath(sys.executable)).parent / script
     if sibling.exists():
-        return str(sibling.resolve())
+        return str(sibling)
 
     exe = shutil.which("orlog")
-    return str(Path(exe).resolve()) if exe else str(argv0.resolve())
+    return str(Path(os.path.abspath(exe))) if exe else str(argv0)
+
+
+def ephemeral_command_reason(command: str) -> str | None:
+    """Why this command path will not survive, or None if it looks durable.
+
+    `uvx orlog ...` runs from uv's content-addressed tool cache, so the
+    path it would register (~/.cache/uv/archive-v0/<hash>/bin/orlog)
+    changes with the version and disappears on `uv cache clean` -- a
+    registration that works until it silently doesn't. The same goes for
+    anything run out of a temp directory. uvx is a fine way to try orlog;
+    it is not a way to install the server an agent spawns for months.
+    """
+    if not command:
+        return None
+    path = Path(command)
+    parts = set(path.parts)
+    cache_dir = os.environ.get("UV_CACHE_DIR")
+    in_uv_cache = "archive-v0" in parts or ("uv" in parts and ".cache" in parts)
+    if cache_dir and str(path).startswith(str(Path(os.path.abspath(cache_dir)))):
+        in_uv_cache = True
+    if in_uv_cache:
+        return (
+            "it lives in uv's tool cache, which is keyed by version and cleared by "
+            "`uv cache clean` -- install orlog (pipx install orlog, or brew) before registering, "
+            "so the path survives"
+        )
+    tmp = Path(os.path.abspath(tempfile.gettempdir()))
+    try:
+        path.relative_to(tmp)
+    except ValueError:
+        return None
+    return f"it lives under the temporary directory {tmp}, which is not a durable install location"
 
 
 def _home() -> Path:
@@ -204,6 +264,73 @@ def server_entry(client: McpClient, ws: Workspace, vault_key: str, *, command: s
     return entry
 
 
+def entry_workspace(entry: dict) -> Path | None:
+    """The workspace an existing server entry points at, from its args."""
+    args = entry.get("args") if isinstance(entry, dict) else None
+    if not isinstance(args, list):
+        return None
+    for arg in args:
+        if isinstance(arg, str) and arg != "serve":
+            return Path(arg)
+    return None
+
+
+def _same_workspace(entry: dict, ws: Workspace) -> bool:
+    existing = entry_workspace(entry)
+    if existing is None:
+        return False
+    return existing.resolve() == ws.root.resolve()
+
+
+def _refuse_to_clobber_another_workspace(
+    existing: object, ws: Workspace, *, server_name: str, path: Path
+) -> None:
+    """Replacing an entry that points at a DIFFERENT workspace destroys that
+    workspace's vault key.
+
+    That env block is the only copy on disk -- orlog deliberately never
+    writes the key anywhere else -- so overwriting it makes the other
+    workspace's encrypted pseudonym registry unrecoverable. Re-registering
+    the SAME workspace is a repair and is allowed.
+    """
+    if not isinstance(existing, dict) or _same_workspace(existing, ws):
+        return
+    other = entry_workspace(existing)
+    where = f" (it points at {other})" if other else ""
+    raise ClientConfigError(
+        f"{path} already has a server named {server_name!r} for a different workspace{where}. "
+        f"Replacing it would destroy that workspace's only copy of its {VAULT_KEY_ENV}, making its "
+        f"vault unrecoverable -- pass --server-name to register this one alongside it."
+    )
+
+
+def find_registered_vault_key(
+    ws: Workspace, *, path_for: Callable[[str], Path] | None = None
+) -> tuple[str, str] | None:
+    """The vault key already recorded for `ws` in some client's config, with
+    a label saying where it came from.
+
+    This is what makes repairing an existing workspace possible. `orlog
+    init` refuses to mint a new key for a workspace that already has a
+    vault (a fresh key cannot open it), so a re-registration has to recover
+    the real key -- and a stale entry still carries it; it is the command
+    path that went bad, not the key.
+    """
+    resolve = path_for or (lambda key: config_path_for(CLIENTS[key]))
+    for key in sorted(CLIENTS):
+        try:
+            path = resolve(key)
+            for server in iter_registered_servers(key, config_path=path):
+                if not _same_workspace(server.entry, ws):
+                    continue
+                env = server.entry.get("env")
+                if isinstance(env, dict) and env.get(VAULT_KEY_ENV):
+                    return str(env[VAULT_KEY_ENV]), f"{CLIENTS[key].label} ({path})"
+        except ClientConfigError:
+            continue  # an unreadable config is doctor's business, not this lookup's
+    return None
+
+
 def _backup(path: Path) -> None:
     if path.exists():
         shutil.copy2(path, path.with_suffix(path.suffix + ".bak"))
@@ -230,6 +357,7 @@ def _write_json_config(
     servers = data.setdefault(client.servers_key, {})
     if not isinstance(servers, dict):
         raise ClientConfigError(f"{path} has a {client.servers_key!r} that is not an object -- orlog will not rewrite it")
+    _refuse_to_clobber_another_workspace(servers.get(server_name), ws, server_name=server_name, path=path)
     servers[server_name] = server_entry(client, ws, vault_key, command=command)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     return path
@@ -251,11 +379,26 @@ def _write_toml_config(
                 f"{path} exists but is not valid TOML ({exc}) -- fix or remove it, "
                 f"or add the [mcp_servers.{server_name}] table yourself"
             ) from exc
-        if server_name in (existing.get("mcp_servers") or {}):
+        previous = (existing.get("mcp_servers") or {}).get(server_name)
+        if isinstance(previous, dict):
+            # orlog appends rather than rewrites TOML so the user's comments
+            # and formatting survive, which means it cannot replace a table
+            # in place. Say which case this is: repairing this workspace's
+            # own entry needs one field changed, while another workspace's
+            # entry must not be touched at all (its env block is the only
+            # copy of that vault key).
+            if _same_workspace(previous, ws):
+                raise ClientConfigError(
+                    f"{path} already has an [mcp_servers.{server_name}] table for this workspace. "
+                    f"orlog appends rather than rewrites TOML, so your comments survive -- set that "
+                    f"table's command to {command or orlog_command()} yourself."
+                )
+            other = entry_workspace(previous)
+            where = f" (it points at {other})" if other else ""
             raise ClientConfigError(
-                f"{path} already has an [mcp_servers.{server_name}] table. orlog appends rather than "
-                f"rewrites TOML (so your comments survive), so it will not replace it -- edit that "
-                f"table's command/args/env yourself, or pass --server-name to register a second one."
+                f"{path} already has an [mcp_servers.{server_name}] table for a different "
+                f"workspace{where}. Replacing it would destroy that workspace's only copy of its "
+                f"{VAULT_KEY_ENV} -- pass --server-name to register this one alongside it."
             )
 
     # The `type` discriminator is a JSON-client convention; Codex infers
@@ -308,30 +451,69 @@ def register(
     return writer(client, ws, vault_key, server_name=server_name, path=path, command=command)
 
 
-def registered_servers(client_key: str, *, config_path: Path | None = None) -> dict[str, dict]:
-    """Every MCP server this client has registered, for `orlog doctor`.
-
-    Returns {} for a client with no config file at all; raises
-    ClientConfigError if the file exists but cannot be read, which is
-    itself worth reporting.
-    """
-    client = CLIENTS[client_key]
-    path = config_path or config_path_for(client)
-    if not path.exists():
-        return {}
+def _load_client_config(client: McpClient, path: Path) -> dict:
     text = path.read_text(encoding="utf-8")
     if client.format == "toml-append":
         import tomllib
 
         try:
-            data = tomllib.loads(text)
+            return tomllib.loads(text)
         except tomllib.TOMLDecodeError as exc:
             raise ClientConfigError(f"{path} is not valid TOML ({exc})") from exc
-        servers = data.get("mcp_servers") or {}
-    else:
-        try:
-            data = json.loads(text or "{}")
-        except json.JSONDecodeError as exc:
-            raise ClientConfigError(f"{path} is not valid JSON ({exc})") from exc
-        servers = data.get(client.servers_key) or {} if isinstance(data, dict) else {}
+    try:
+        data = json.loads(text or "{}")
+    except json.JSONDecodeError as exc:
+        raise ClientConfigError(f"{path} is not valid JSON ({exc})") from exc
+    return data if isinstance(data, dict) else {}
+
+
+def registered_servers(client_key: str, *, config_path: Path | None = None) -> dict[str, dict]:
+    """The servers this client registers GLOBALLY (its top-level map).
+
+    Returns {} for a client with no config file at all; raises
+    ClientConfigError if the file exists but cannot be read, which is
+    itself worth reporting. Use `iter_registered_servers` to also see
+    project-scoped registrations.
+    """
+    client = CLIENTS[client_key]
+    path = config_path or config_path_for(client)
+    if not path.exists():
+        return {}
+    data = _load_client_config(client, path)
+    key = "mcp_servers" if client.format == "toml-append" else client.servers_key
+    servers = data.get(key) or {}
     return servers if isinstance(servers, dict) else {}
+
+
+def iter_registered_servers(client_key: str, *, config_path: Path | None = None) -> list[RegisteredServer]:
+    """Every server this client registers, in every scope it supports.
+
+    Claude Code keeps a second, per-directory map at
+    `projects.<path>.mcpServers` -- that is where `claude mcp add` without
+    a global scope puts a server. Reading only the top-level map reports a
+    perfectly good project-scoped registration as absent, which is the
+    opposite of what doctor is for.
+    """
+    client = CLIENTS[client_key]
+    path = config_path or config_path_for(client)
+    if not path.exists():
+        return []
+    found = [
+        RegisteredServer("global", name, entry)
+        for name, entry in registered_servers(client_key, config_path=path).items()
+        if isinstance(entry, dict)
+    ]
+    if not client.project_scoped:
+        return found
+    projects = _load_client_config(client, path).get("projects")
+    if isinstance(projects, dict):
+        for project_path, project in sorted(projects.items()):
+            servers = project.get(client.servers_key) if isinstance(project, dict) else None
+            if not isinstance(servers, dict):
+                continue
+            found += [
+                RegisteredServer(f"project {project_path}", name, entry)
+                for name, entry in servers.items()
+                if isinstance(entry, dict)
+            ]
+    return found
