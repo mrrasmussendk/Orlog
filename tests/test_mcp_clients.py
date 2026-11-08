@@ -70,6 +70,52 @@ def test_registering_writes_a_spawnable_stdio_server_with_the_vault_key(client_k
     assert entry["env"] == {VAULT_KEY_ENV: "the-vault-key"}
 
 
+def test_the_registered_command_is_the_orlog_that_is_running(tmp_path, monkeypatch):
+    # Two installs on one machine: the one being invoked, and another that
+    # happens to come first on PATH. Registering the PATH one points the
+    # agent at different code, and silently -- that path exists, so doctor
+    # calls it fine.
+    invoked = tmp_path / "venv" / "bin" / "orlog"
+    invoked.parent.mkdir(parents=True)
+    invoked.write_text("#!/bin/sh\n", encoding="utf-8")
+    other = tmp_path / "usr" / "local" / "bin" / "orlog"
+    other.parent.mkdir(parents=True)
+    other.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("orlog.mcp_clients.sys.argv", [str(invoked), "init"])
+    monkeypatch.setattr("orlog.mcp_clients.shutil.which", lambda name: str(other))
+
+    assert orlog_command() == str(invoked)
+
+
+def test_the_registered_command_falls_back_to_this_interpreters_console_script(tmp_path, monkeypatch):
+    # `python -m orlog.cli`: argv[0] is cli.py, so the console script
+    # installed beside this interpreter is the right answer -- still not
+    # whatever PATH happens to resolve first.
+    bin_dir = tmp_path / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "orlog").write_text("#!/bin/sh\n", encoding="utf-8")
+    other = tmp_path / "elsewhere" / "orlog"
+    other.parent.mkdir(parents=True)
+    other.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("orlog.mcp_clients.sys.argv", [str(tmp_path / "src" / "orlog" / "cli.py")])
+    monkeypatch.setattr("orlog.mcp_clients.sys.executable", str(bin_dir / "python3"))
+    monkeypatch.setattr("orlog.mcp_clients.sys.platform", "linux")
+    monkeypatch.setattr("orlog.mcp_clients.shutil.which", lambda name: str(other))
+
+    assert orlog_command() == str(bin_dir / "orlog")
+
+
+def test_the_registered_command_uses_path_only_as_a_last_resort(tmp_path, monkeypatch):
+    on_path = tmp_path / "somewhere" / "orlog"
+    on_path.parent.mkdir(parents=True)
+    on_path.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("orlog.mcp_clients.sys.argv", [str(tmp_path / "nope" / "cli.py")])
+    monkeypatch.setattr("orlog.mcp_clients.sys.executable", str(tmp_path / "nope" / "python3"))
+    monkeypatch.setattr("orlog.mcp_clients.shutil.which", lambda name: str(on_path))
+
+    assert orlog_command() == str(on_path)
+
+
 def test_vscode_uses_its_own_servers_key_and_type_discriminator(ws):
     path = register("vscode", ws, "k")
 

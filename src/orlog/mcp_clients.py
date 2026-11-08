@@ -136,17 +136,39 @@ CLIENTS: dict[str, McpClient] = {
 
 
 def orlog_command() -> str:
-    """Best-effort absolute path to the currently-running `orlog`
-    executable, for embedding as the spawned MCP server's `command`.
+    """Absolute path to the `orlog` that is running THIS command, for
+    embedding as the spawned MCP server's `command`.
 
     An MCP client spawns this with its own environment, which is NOT the
     shell's -- a bare "orlog" resolves against whatever PATH the client
     inherited from the desktop session, which on macOS in particular does
     not include pipx's or Homebrew's bin directory. An absolute path is the
     difference between a server that starts and one that fails invisibly.
+
+    PATH is consulted LAST, not first. A machine with more than one orlog
+    (a pipx install plus a checkout's editable install, say) resolves
+    `shutil.which("orlog")` to whichever comes first on PATH -- which is
+    not necessarily the one the user just invoked, and registering the
+    other one points the agent at a different install's code. Worse, it
+    fails silently: the path exists, so `orlog doctor` calls it fine.
+    So: the running argv[0] if it is an orlog, then the console script
+    installed beside this interpreter (what pip/pipx/venv creates), and
+    only then PATH.
     """
+    argv0 = Path(sys.argv[0])
+    if argv0.name.startswith("orlog") and argv0.exists():
+        # A console script or the frozen binary, invoked directly.
+        return str(argv0.resolve())
+
+    # `python -m orlog.cli`: argv[0] is cli.py, but the console script for
+    # THIS interpreter sits next to it.
+    script = "orlog.exe" if sys.platform.startswith("win") else "orlog"
+    sibling = Path(sys.executable).parent / script
+    if sibling.exists():
+        return str(sibling.resolve())
+
     exe = shutil.which("orlog")
-    return str(Path(exe).resolve()) if exe else str(Path(sys.argv[0]).resolve())
+    return str(Path(exe).resolve()) if exe else str(argv0.resolve())
 
 
 def _home() -> Path:
